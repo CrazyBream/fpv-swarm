@@ -1,0 +1,17 @@
+{
+  "name": "fpv-swarm",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "biome check ./src",
+    "format": "biome format --write ./src"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.8",
+    "vite": "^8.3.6"
+  }
+}

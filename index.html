@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FPV Swarm — Tactical Drone Simulator</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #070b10;
+            font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        }
+        #arena-canvas {
+            display: block;
+        }
+        #exit-btn {
+            position: fixed;
+            top: 18px;
+            right: 18px;
+            padding: 8px 16px;
+            background: rgba(244, 63, 94, 0.15);
+            color: #fb7185;
+            border: 1px solid rgba(244, 63, 94, 0.5);
+            font-family: inherit;
+            font-size: 13px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            z-index: 10;
+        }
+        #exit-btn:hover {
+            background: rgba(244, 63, 94, 0.35);
+            color: #fff;
+        }
+        #exit-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(7, 11, 16, 0.92);
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            color: #f1f5f9;
+            z-index: 20;
+        }
+        #exit-overlay.visible {
+            display: flex;
+        }
+        #exit-overlay h2 {
+            color: #10b981;
+            letter-spacing: 2px;
+        }
+        #exit-overlay p {
+            color: #94a3b8;
+            font-size: 14px;
+        }
+        #restart-btn {
+            margin-top: 8px;
+            padding: 10px 22px;
+            background: rgba(16, 185, 129, 0.2);
+            color: #34d399;
+            border: 1px solid #10b981;
+            font-family: inherit;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        #restart-btn:hover {
+            background: rgba(16, 185, 129, 0.4);
+            color: #fff;
+        }
+    </style>
+</head>
+<body>
+<canvas id="arena-canvas"></canvas>
+<button id="exit-btn" type="button">[ESC] ВИЙТИ З ГРИ</button>
+
+<div id="exit-overlay">
+    <h2>// СЕСІЮ ЗАВЕРШЕНО //</h2>
+    <p>Ігровий цикл зупинено, слухачі подій клавіатури та вікна очищено (destroy).</p>
+    <button id="restart-btn" type="button">ПОВЕРНУТИСЯ НА АРЕНУ</button>
+</div>
+
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>
