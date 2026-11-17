@@ -1,86 +1,86 @@
-import { createInput } from './input.js'
-import { createLoop } from './loop.js'
-import { blendDroneState, drawArenaGrid, drawHud, drawShip } from './render/hud-and-drone.js'
-import { setupViewport } from './render/viewport.js'
-import { syncWrapForInterpolation, wrapPosition } from './sim/arena.js'
-import { createDrone, integrate, snapshotDrone } from './sim/ship.js'
+import { createInput } from "./input.js";
+import { createLoop } from "./loop.js";
+import { drawHud, drawWorld } from "./render/hud-and-drone.js";
+import { setupViewport } from "./render/viewport.js";
+import { Ship } from "./sim/ship.js";
+import { World } from "./sim/world.js";
 
-const canvas = document.querySelector('#arena-canvas')
-const exitBtn = document.querySelector('#exit-btn')
-const exitOverlay = document.querySelector('#exit-overlay')
-const restartBtn = document.querySelector('#restart-btn')
+const canvas = document.querySelector("#arena-canvas");
+const exitBtn = document.querySelector("#exit-btn");
+const exitOverlay = document.querySelector("#exit-overlay");
+const restartBtn = document.querySelector("#restart-btn");
 
-let input = createInput(window)
-const drone = createDrone()
-let prevDrone = snapshotDrone(drone)
+let input = createInput(window);
+const world = new World();
 
 let viewport = setupViewport(canvas, ({ width, height }) => {
-    wrapPosition(drone, width, height)
-})
+	world.setBounds(width, height);
+});
 
-drone.x = viewport.bounds.width / 2
-drone.y = viewport.bounds.height / 2
-prevDrone = snapshotDrone(drone)
+const player = new Ship({
+	x: viewport.bounds.width / 2,
+	y: viewport.bounds.height / 2,
+});
+world.player = player;
+world.spawn(player);
+world.populateInitialAsteroids();
+
+const handleMouseDown = () => {
+	player.fire(world);
+};
+canvas.addEventListener("mousedown", handleMouseDown);
 
 function simulate(dt) {
-    prevDrone = snapshotDrone(drone)
-    integrate(drone, input, dt)
-    wrapPosition(drone, viewport.bounds.width, viewport.bounds.height)
-    syncWrapForInterpolation(prevDrone, drone, viewport.bounds.width, viewport.bounds.height)
-    input.clearFrameEdges()
+	world.step(dt, input);
+	input.clearFrameEdges();
 }
 
 function render(alpha, telemetry) {
-    drawArenaGrid(viewport.ctx, viewport.bounds.width, viewport.bounds.height)
-    const interpolated = blendDroneState(prevDrone, drone, alpha)
-    drawShip(viewport.ctx, interpolated)
-    drawHud(viewport.ctx, telemetry, drone)
+	drawWorld(viewport.ctx, world, alpha);
+	drawHud(viewport.ctx, telemetry, world);
 }
 
-const gameLoop = createLoop({ step: 1 / 60, simulate, render })
-gameLoop.start()
+const gameLoop = createLoop({ step: 1 / 60, simulate, render });
+gameLoop.start();
 
 function exitGame() {
-    gameLoop.stop()
-    input.destroy()
-    viewport.destroy()
-    exitOverlay.classList.add('visible')
-    exitBtn.style.display = 'none'
+	gameLoop.stop();
+	input.destroy();
+	viewport.destroy();
+	canvas.removeEventListener("mousedown", handleMouseDown);
+	exitOverlay.classList.add("visible");
+	exitBtn.style.display = "none";
 }
 
 function restartGame() {
-    exitOverlay.classList.remove('visible')
-    exitBtn.style.display = 'block'
+	exitOverlay.classList.remove("visible");
+	exitBtn.style.display = "block";
 
-    input = createInput(window)
-    viewport = setupViewport(canvas, ({ width, height }) => {
-        wrapPosition(drone, width, height)
-    })
+	input = createInput(window);
+	viewport = setupViewport(canvas, ({ width, height }) => {
+		world.setBounds(width, height);
+	});
+	canvas.addEventListener("mousedown", handleMouseDown);
 
-    drone.x = viewport.bounds.width / 2
-    drone.y = viewport.bounds.height / 2
-    drone.vx = 0
-    drone.vy = 0
-    drone.angle = -Math.PI / 2
-    prevDrone = snapshotDrone(drone)
-
-    gameLoop.start()
+	player.resetAt(viewport.bounds.width / 2, viewport.bounds.height / 2);
+	world.spawn(player);
+	gameLoop.start();
 }
 
-exitBtn.addEventListener('click', exitGame)
-restartBtn.addEventListener('click', restartGame)
+exitBtn.addEventListener("click", exitGame);
+restartBtn.addEventListener("click", restartGame);
 
-window.addEventListener('keydown', () => {
-    if (input.justPressed('Escape')) {
-        exitGame()
-        return
-    }
-    if (input.justPressed('Space')) {
-        if (gameLoop.isRunning()) {
-            gameLoop.stop()
-        } else {
-            input.clearFrameEdges()
-            gameLoop.start()
-        }
-    }
-})
+window.addEventListener("keydown", () => {
+	if (input.justPressed("Escape")) {
+		exitGame();
+		return;
+	}
+	if (input.justPressed("KeyP")) {
+		if (gameLoop.isRunning()) {
+			gameLoop.stop();
+		} else {
+			input.clearFrameEdges();
+			gameLoop.start();
+		}
+	}
+});

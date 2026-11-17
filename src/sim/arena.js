@@ -1,14 +1,14 @@
-export function wrapPosition(body, arenaWidth, arenaHeight) {
-    if (arenaWidth <= 0 || arenaHeight <= 0) return
-    body.x = ((body.x % arenaWidth) + arenaWidth) % arenaWidth
-    body.y = ((body.y % arenaHeight) + arenaHeight) % arenaHeight
+export function wrapPosition(entity, arenaWidth, arenaHeight) {
+	if (arenaWidth <= 0 || arenaHeight <= 0) return;
+	entity.pos.x = ((entity.pos.x % arenaWidth) + arenaWidth) % arenaWidth;
+	entity.pos.y = ((entity.pos.y % arenaHeight) + arenaHeight) % arenaHeight;
 }
 
-export function syncWrapForInterpolation(prevState, currState, arenaWidth, arenaHeight) {
-    if (Math.abs(currState.x - prevState.x) > arenaWidth * 0.5) {
-        prevState.x = currState.x
-    }
-    if (Math.abs(currState.y - prevState.y) > arenaHeight * 0.5) {
-        prevState.y = currState.y
-    }
+export function syncWrapForInterpolation(entity, arenaWidth, arenaHeight) {
+	if (Math.abs(entity.pos.x - entity.prevPos.x) > arenaWidth * 0.5) {
+		entity.prevPos.x = entity.pos.x;
+	}
+	if (Math.abs(entity.pos.y - entity.prevPos.y) > arenaHeight * 0.5) {
+		entity.prevPos.y = entity.pos.y;
+	}
 }
