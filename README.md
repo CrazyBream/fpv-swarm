@@ -344,3 +344,64 @@ JavaScript виконується в одному потоці за принци
 
 ### Компроміс затримки інтерполяції (Entity Interpolation Delay)
 Для відмальовки союзних та ворожих дронів (`ALLY #21`, `ALLY #22`) я встановив буфер інтерполяції **`Interp delay: 66 ms`** (рівно **2 періоди серверних знімків** при 30 Hz). Клієнт рендерить інші кораблі в точці часу `performance.now() - 66 ms`, лінійно інтерполюючи координати та кут між двома вже отриманими знімками. Це повністю прибирає 30-герцове смикання на 144 Hz моніторі та витримує втрату одного пакета (`2% drop`) або сплеск джиттеру до `±30 ms` ціною лише 66 мс візуальної затримки відображення суперників.
+
+---
+
+# Lab 06 — TypeScript: Types for the Protocol, the Simulation, and Both Sides of the Wire
+
+## 1. Єдине джерело правди для протоколу (`shared/src/protocol.ts`) та `strict` конфігурація (M1 – M3)
+Я мігрував усі три пакети воркспейсу (`shared/`, `server/`, `client/`) з JavaScript на TypeScript із максимально суворими налаштуваннями в `tsconfig.base.json`:
+- `"strict": true` (`strictNullChecks`, `noImplicitAny`, `strictFunctionTypes`);
+- `"noUncheckedIndexedAccess": true` — будь-яке звернення за індексом масиву або `Map.get()` повертає `T | undefined`, вимагаючи явної перевірки перед читанням;
+- `"verbatimModuleSyntax": true` — примушує явно розмежовувати імпорти типів (`import type`) та рантайм-значень, які повністю стираються під час компіляції.
+
+У модулі `shared/src/protocol.ts` я видалив старий ручний валідатор із Lab 04 і описав усі повідомлення через декларативні схеми **Zod** (`ClientMessageSchema`, `ServerMessageSchema`). Статичні типи TypeScript автоматично виводяться зі схем через `z.infer<typeof ClientMessageSchema>`, а на межі мережі функція `parseClientMessage(raw: unknown)` використовує `.safeParse()` і повертає тип-результат `ParseResult<ClientMessage>`, гарантуючи відсутність `any` при читанні даних із сокета. Бінарний кодек у `shared/src/codec/binary.ts` типізовано через спільний інтерфейс `Codec<Snapshot>` із двома взаємозамінними реалізаціями (`binarySnapshotCodec` та `jsonSnapshotCodec`).
+
+---
+
+## 2. Що знайшов TypeScript під час міграції («What TypeScript found» — M4)
+Під час переходу на `strict` та `noUncheckedIndexedAccess` компілятор `tsc --noEmit` і лінтер виявили 6 реальних проблем у попередньому коді:
+1. **Пастка стандартного `Omit` на об'єднаннях типів (`TS2353` у `server/src/ws.ts`):** коли я типізував `encodeServerMessage(msg: Omit<ServerMessage, 'v' | 't'>)`, компілятор видав помилки на всі поля (`playerId`, `room`, `text`, `sender`, `clientSentAt`), тому що вбудований `Omit` на union-типах залишає лише спільні ключі всіх варіантів (тобто лише `type`). Я виправив це за допомогою власного дистрибутивного умовного типу `DistributiveOmit<T, K>`.
+2. **Небезпечне читання індексів буфера інтерполяції (`client/src/net/reconciler.ts`):** у циклі пошуку опорних знімків `this.snapshots[0]` та `this.snapshots[i - 1]` без `noUncheckedIndexedAccess` вважалися завжди визначеними. TypeScript змусив додати явну перевірку `if (candidateOlder && candidateNewer)` та безпечний фолбек `?? latest`.
+3. **Неоголошена властивість на сокеті у таймері Heartbeat (`server/src/ws.ts`):** раніше лічильник пропущених понгів `socket.missedPongs` прикріплювався динамічно прямо до чужого екземпляра `WebSocket` із бібліотеки `ws`. TypeScript заборонив мутацію неоголошених полів, тому я переніс стан у типізований `WeakMap<WebSocket, SocketClientState>` із перевіркою `if (!st) continue`.
+4. **Пряма мутація координат вектора (`client/src/sim/arena.ts` та `client/src/main.ts`):** коли поля `Vector2.x` та `Vector2.y` стали `readonly`, компілятор одразу підсвітив спроби прямої мутації `entity.pos.x = ...` та нетипізований виклик `entity.pos.constructor`, змусивши створювати чистий екземпляр `new Vector2(nx, ny)`.
+5. **Неперевірені індекси словників MIME та звуків (`TS7053` у `server/src/index.ts` та `client/vite.config.ts`):** звернення `sounds[pathname]` до об'єктного літерала за довільним рядком `pathname: string` могло повернути `undefined`. Я додав явну анотацію `Record<string, Buffer>` та вузьку перевірку `if (soundBuf)` перед відправкою відповіді.
+6. **Повернення значення з `void`-функції при вичерпній перевірці (`client/src/render/hud-and-drone.ts`):** у рендері `drawRemoteEntities` конструкція `return _exhaustive` у гілці `default` порушувала контракт повернення `void`. Я виніс перевірку в окрему допоміжну функцію `assertNever(value: never): never`, яка кидає виняток і коректно працює у функціях із будь-яким типом повернення.
+
+---
+
+## 3. Три найцікавіші типи у проєкті (Пояснення для JS-розробника — M4)
+
+### 1. Брендовані типи (`EntityId`, `Tick`, `Seq` у `shared/src/protocol.ts`)
+
+    export type EntityId = number & { readonly __brand: 'EntityId' }
+    export type Tick = number & { readonly __brand: 'Tick' }
+    export type Seq = number & { readonly __brand: 'Seq' }
+
+- **Як це працює:** у звичайному JavaScript і `playerId`, і номер серверного кадру `tick`, і порядковий номер інпуту `seq` — це просто `number`. Якщо випадково передати `tick` замість `EntityId` у `match.removePlayerShip(tick)`, JS мовчки спробує видалити гравця з ID, рівним номеру кадру. Перетин `number & { readonly __brand: 'EntityId' }` додає віртуальну мітку, яка існує **виключно під час компіляції** і повністю зникає в JS-рантаймі (нуль витрат пам'яті чи CPU), але робить неможливим випадкове змішування ID сутності, тіку та номера пакета.
+
+### 2. Дистрибутивний `DistributiveOmit` та вичерпний `assertNever` (`shared/src/protocol.ts`)
+
+    export type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
+    export type ServerMessagePayload = DistributiveOmit<ServerMessage, 'v' | 't'>
+
+    export function assertNever(value: never): never {
+      throw new Error(`Unhandled discriminated union member: ${JSON.stringify(value)}`)
+    }
+
+- **Як це працює:** коли умовний тип `T extends unknown ? ... : never` отримує на вхід об'єднання `A | B | C`, TypeScript автоматично розподіляє (дистрибутує) операцію `Omit` окремо на кожен варіант: `Omit<A, 'v' | 't'> | Omit<B, 'v' | 't'> | ...`. Завдяки цьому під час виклику `encodeServerMessage({ type: 'welcome', playerId, seed, room })` компілятор точно знає, які поля обов'язкові саме для повідомлення `'welcome'`. А функція `assertNever(msg)` у `default`-гілці кожного `switch (msg.type)` гарантує, що при додаванні нового повідомлення в схему компілятор одразу підкаже всі місця на клієнті й сервері, де його забули обробити.
+
+### 3. Узагальнена типізована шина подій (`Bus<E>` у `client/src/events/bus.ts`)
+
+    export class Bus<E extends Record<string, unknown>> {
+      on<K extends keyof E>(name: K, fn: (payload: E[K]) => void): () => void { ... }
+      emit<K extends keyof E>(name: K, payload: E[K]): void { ... }
+    }
+
+- **Як це працює:** параметр типу `K extends keyof E` жорстко зв'язує назву події (наприклад, `'scoreChanged'`) із типом її аргументу `E[K]` (`{ readonly score: number; readonly delta: number }`). На відміну від стандартного `EventTarget`, де `CustomEvent.detail` має тип `any`, у `Bus<GameEvents>` неможливо підписатися на неіснуючу подію або передати неправильну форму даних у `emit`.
+
+---
+
+## 4. Архітектурне рішення щодо UI-фреймворку (M4)
+Для лобі та HUD я свідомо залишив зв'язку **типізований DOM + `Bus<GameEvents>` + Canvas 2D** без підключення React, Vue або Svelte:
+- **Чому:** інтерфейс симулятора складається з однієї модальної панелі лобі, вікна чату та високочастотного OSD/Netgraph оверлею, який відмальовується безпосередньо на Canvas із частотою **144 Hz**. Підключення UI-фреймворку додало б віртуальний DOM і додатковий крок компіляції компонентів, тоді як типізовані селектори `querySelector<HTMLButtonElement>` та `Bus<GameEvents>` уже дають 100% перевірку типів на етапі збірки при нульових накладних витратах під час польоту.
