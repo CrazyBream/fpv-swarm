@@ -305,3 +305,89 @@ export function drawHud(ctx, telemetry, world, lastScoreDelta = 0) {
   ctx.fillText('Pickups: [RPM] Rapid Fire [AIM] Homing [+HP] Repair', 30, 174)
   ctx.restore()
 }
+
+export function drawRemoteEntities(ctx, remotes, spriteSheet) {
+  for (const entity of remotes) {
+    ctx.save()
+    ctx.translate(entity.x, entity.y)
+    ctx.rotate(entity.angle)
+
+    if (entity.kind === 1) {
+      if (spriteSheet) {
+        ctx.drawImage(spriteSheet, 0, 0, 64, 64, -18, -18, 36, 36)
+      }
+      ctx.strokeStyle = '#38bdf8'
+      ctx.lineWidth = 1.8
+      ctx.beginPath()
+      ctx.arc(0, 0, 19, 0, Math.PI * 2)
+      ctx.stroke()
+
+      ctx.rotate(-entity.angle)
+      ctx.fillStyle = '#38bdf8'
+      ctx.font = 'bold 11px ui-monospace, monospace'
+      ctx.textAlign = 'center'
+      ctx.fillText(`ALLY #${entity.id} [${entity.hp}HP]`, 0, -24)
+    } else if (entity.kind === 2) {
+      ctx.fillStyle = '#f43f5e'
+      ctx.beginPath()
+      ctx.arc(0, 0, 4, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.restore()
+  }
+}
+
+export function drawNetgraph(ctx, width, netStats) {
+  const boxW = 345
+  const boxH = 136
+  const x = width - boxW - 18
+  const y = 62
+
+  ctx.save()
+  ctx.fillStyle = 'rgba(7, 11, 16, 0.88)'
+  ctx.strokeStyle = 'rgba(56, 189, 248, 0.45)'
+  ctx.lineWidth = 1
+  ctx.fillRect(x, y, boxW, boxH)
+  ctx.strokeRect(x, y, boxW, boxH)
+
+  ctx.fillStyle = '#38bdf8'
+  ctx.font = 'bold 13px ui-monospace, SFMono-Regular, Consolas, monospace'
+  ctx.fillText(
+    `NETGRAPH // CODEC: ${netStats.useBinary ? 'BINARY (DataView)' : 'JSON'}`,
+    x + 12,
+    y + 22,
+  )
+
+  ctx.fillStyle = '#f1f5f9'
+  ctx.font = '12px ui-monospace, SFMono-Regular, Consolas, monospace'
+  ctx.fillText(
+    `RTT: ${netStats.rttMs.toFixed(1)} ms | Snap age: ${netStats.snapAgeMs.toFixed(0)} ms`,
+    x + 12,
+    y + 44,
+  )
+  ctx.fillText(
+    `In: ${(netStats.bytesIn / 1024).toFixed(2)} KB/s | Out: ${(netStats.bytesOut / 1024).toFixed(2)} KB/s`,
+    x + 12,
+    y + 64,
+  )
+  ctx.fillText(
+    `Unacked inputs: ${netStats.pendingCount} | Interp delay: ${netStats.interpDelayMs} ms`,
+    x + 12,
+    y + 84,
+  )
+
+  ctx.fillStyle = netStats.correctionPx > 5 ? '#f43f5e' : '#10b981'
+  ctx.fillText(
+    `Reconcile error: ${netStats.correctionPx.toFixed(2)} px | Tick: ${netStats.serverTick}`,
+    x + 12,
+    y + 104,
+  )
+
+  ctx.fillStyle = '#94a3b8'
+  ctx.fillText(
+    `Pred: ${netStats.predOn ? 'ON' : 'OFF'} | Recon: ${netStats.reconOn ? 'ON' : 'OFF'} | DriftBug: ${netStats.driftOn ? 'ON' : 'OFF'}`,
+    x + 12,
+    y + 124,
+  )
+  ctx.restore()
+}

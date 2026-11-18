@@ -4,6 +4,7 @@ import { readdir, stat } from 'node:fs/promises'
 import http from 'node:http'
 import path from 'node:path'
 import { pipeline } from 'node:stream/promises'
+import { benchmarkCodecs } from '@fpv-swarm/shared/codec/binary.js'
 import { config } from './config.js'
 import { createSyntheticReplayStream } from './log/replay.js'
 import { RoomManager } from './rooms.js'
@@ -142,6 +143,13 @@ const server = http.createServer(async (req, res) => {
       ok: true,
       uptimeSec: Math.round(process.uptime()),
       rssMb: Number((process.memoryUsage().rss / (1024 * 1024)).toFixed(2)),
+    })
+    return
+  }
+  if (req.method === 'GET' && pathname === '/api/stats') {
+    sendJson(res, 200, {
+      rooms: roomManager.listSummaries(),
+      codecBenchmark4Players: benchmarkCodecs(4),
     })
     return
   }

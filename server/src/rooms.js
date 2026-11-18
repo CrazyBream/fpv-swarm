@@ -1,7 +1,10 @@
 import { EventEmitter } from 'node:events'
 import { createRoomLogStream } from './log/matchlog.js'
+import { Match } from './match.js'
 
 export class Room extends EventEmitter {
+  static #nextPlayerNumericId = 1
+
   constructor({ id, name, asteroidCount = 7, maxPlayers = 8, isDefault = false }) {
     super()
     this.id = id
@@ -11,6 +14,17 @@ export class Room extends EventEmitter {
     this.isDefault = isDefault
     this.players = new Map()
     this.logger = null
+    this.match = new Match({
+      seed: 1000 + Room.#nextPlayerNumericId,
+      tickRate: 30,
+      onSnapshot: (matchInstance) => this.emit('snapshotTick', matchInstance),
+    })
+  }
+
+  allocateNumericId() {
+    const id = Room.#nextPlayerNumericId
+    Room.#nextPlayerNumericId = (Room.#nextPlayerNumericId % 400) + 1
+    return id
   }
 
   join(player) {
@@ -18,7 +32,16 @@ export class Room extends EventEmitter {
       throw new Error('Room is full')
     }
     this.players.set(player.id, player)
-    const evt = { type: 'join', roomId: this.id, playerId: player.id, name: player.name }
+    this.match.addPlayerShip(player.numericId, player.name)
+    this.match.start()
+
+    const evt = {
+      type: 'join',
+      roomId: this.id,
+      playerId: player.id,
+      numericId: player.numericId,
+      name: player.name,
+    }
     this.logger?.writeEvent(evt)
     this.emit('event', evt)
     this.emit('join', player)
@@ -28,12 +51,15 @@ export class Room extends EventEmitter {
     const player = this.players.get(playerId)
     if (!player) return
     this.players.delete(playerId)
+    this.match.removePlayerShip(player.numericId)
+
     const evt = { type: 'leave', roomId: this.id, playerId: player.id, name: player.name }
     this.logger?.writeEvent(evt)
     this.emit('event', evt)
     this.emit('leave', player)
 
     if (this.players.size === 0) {
+      this.match.stop()
       this.emit('empty', this.id)
     }
   }
@@ -54,6 +80,7 @@ export class Room extends EventEmitter {
   getRoster() {
     return Array.from(this.players.values()).map((p) => ({
       id: p.id,
+      numericId: p.numericId,
       name: p.name,
     }))
   }
@@ -67,6 +94,9 @@ export class Room extends EventEmitter {
       pingMs: 12,
       asteroidCount: this.asteroidCount,
       logFile: this.logger?.fileName ?? null,
+      tick: this.match.tick,
+      lastTickMs: Number(this.match.lastTickDurationMs.toFixed(3)),
+      maxJitterMs: Number(this.match.maxTickJitterMs.toFixed(2)),
     }
   }
 }
@@ -153,6 +183,7 @@ export class RoomManager {
   async closeAll() {
     const closers = []
     for (const room of this.#rooms.values()) {
+      room.match.stop()
       if (room.logger) {
         closers.push(room.logger.close())
       }

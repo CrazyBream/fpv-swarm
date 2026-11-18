@@ -1,0 +1,12 @@
+{
+  "name": "@fpv-swarm/shared",
+  "private": true,
+  "version": "0.5.0",
+  "type": "module",
+  "exports": {
+    "./sim/prng.js": "./src/sim/prng.js",
+    "./sim/kinematics.js": "./src/sim/kinematics.js",
+    "./protocol/messages.js": "./src/protocol/messages.js",
+    "./codec/binary.js": "./src/codec/binary.js"
+  }
+}

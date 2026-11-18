@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { decodeInputBinary, encodeSnapshotBinary } from '@fpv-swarm/shared/codec/binary.js'
 import { WebSocketServer } from 'ws'
 import { MSG_TYPES, encodeServerMessage, validateClientMessage } from './protocol.js'
 
@@ -29,30 +30,72 @@ export function attachWebSocketGateway(httpServer, roomManager, config) {
     maxPayload: config.maxPayloadBytes,
   })
 
-  function sendSafe(socket, payloadStr, { critical = false } = {}) {
+  const boundRooms = new Set()
+
+  function sendWithNetSim(state, payload, { critical = false, droppable = false } = {}) {
+    const { socket } = state
     if (socket.readyState !== 1) return
+
     if (socket.bufferedAmount > config.slowClientThresholdBytes) {
-      if (!critical) {
-        return
-      }
+      if (!critical) return
       socket.close(1008, 'Slow client buffer overflow')
       return
     }
-    socket.send(payloadStr)
+
+    if (droppable && state.dropRate > 0 && Math.random() < state.dropRate) {
+      return
+    }
+
+    const totalDelay =
+      state.delayMs > 0
+        ? Math.max(0, state.delayMs * 0.5 + (Math.random() * 2 - 1) * state.jitterMs * 0.5)
+        : 0
+
+    if (totalDelay <= 0) {
+      socket.send(payload)
+    } else {
+      setTimeout(() => {
+        if (socket.readyState === 1) {
+          socket.send(payload)
+        }
+      }, totalDelay)
+    }
   }
 
   function broadcastRoom(room, payloadStr, { critical = false } = {}) {
     for (const member of room.players.values()) {
-      sendSafe(member.socket, payloadStr, { critical })
+      sendWithNetSim(member.state, payloadStr, { critical, droppable: false })
     }
+  }
+
+  function ensureRoomSnapshotHook(room) {
+    if (boundRooms.has(room.id)) return
+    boundRooms.add(room.id)
+
+    room.on('snapshotTick', (match) => {
+      for (const member of room.players.values()) {
+        const snap = match.buildSnapshotFor(member.numericId)
+        if (member.state.useBinary) {
+          const binBuf = encodeSnapshotBinary(snap)
+          sendWithNetSim(member.state, Buffer.from(binBuf), { critical: false, droppable: true })
+        } else {
+          sendWithNetSim(member.state, JSON.stringify(snap), { critical: false, droppable: true })
+        }
+      }
+    })
   }
 
   wss.on('connection', (socket) => {
     const state = {
       id: crypto.randomUUID().slice(0, 8),
+      socket,
       player: null,
       room: null,
       missedPongs: 0,
+      delayMs: 0,
+      jitterMs: 0,
+      dropRate: 0,
+      useBinary: true,
       bucket: new TokenBucket(config.rateLimitPerSec),
     }
 
@@ -70,14 +113,71 @@ export function attachWebSocketGateway(httpServer, roomManager, config) {
       }
     }, config.joinTimeoutMs)
 
-    socket.on('message', async (rawBuffer, isBinary) => {
-      if (isBinary) {
-        socket.close(1003, 'Binary frames not supported in v0')
+    function processIncomingCommand(msg) {
+      if (msg.type === MSG_TYPES.INPUT) {
+        if (!state.room || !state.player) return
+        if (state.dropRate > 0 && Math.random() < state.dropRate) return
+
+        const inDelay =
+          state.delayMs > 0
+            ? Math.max(0, state.delayMs * 0.5 + (Math.random() * 2 - 1) * state.jitterMs * 0.5)
+            : 0
+
+        if (inDelay <= 0) {
+          state.room.match.enqueueInput(state.player.numericId, msg)
+        } else {
+          const roomRef = state.room
+          const numId = state.player.numericId
+          setTimeout(() => {
+            roomRef.match.enqueueInput(numId, msg)
+          }, inDelay)
+        }
         return
       }
 
+      if (msg.type === MSG_TYPES.NETSIM) {
+        state.delayMs = msg.delayMs
+        state.jitterMs = msg.jitterMs
+        state.dropRate = msg.dropRate
+        state.useBinary = msg.useBinary
+        return
+      }
+
+      if (msg.type === MSG_TYPES.PING_RTT) {
+        const pongStr = encodeServerMessage(MSG_TYPES.PONG_RTT, {
+          clientSentAt: msg.clientSentAt,
+        })
+        sendWithNetSim(state, pongStr, { critical: false, droppable: false })
+        return
+      }
+
+      if (msg.type === MSG_TYPES.CHAT) {
+        if (!state.room || !state.player) {
+          socket.close(1008, 'Must join a room before chatting')
+          return
+        }
+        state.room.postChat(state.player, msg.text)
+        const chatPacket = encodeServerMessage(MSG_TYPES.CHAT, {
+          sender: state.player.name,
+          text: msg.text,
+        })
+        broadcastRoom(state.room, chatPacket, { critical: false })
+      }
+    }
+
+    socket.on('message', async (rawBuffer, isBinary) => {
       if (!state.bucket.consume()) {
         socket.close(1008, 'Rate limit exceeded')
+        return
+      }
+
+      if (isBinary) {
+        try {
+          const decodedInput = decodeInputBinary(rawBuffer)
+          processIncomingCommand(decodedInput)
+        } catch {
+          socket.close(1003, 'Invalid binary frame')
+        }
         return
       }
 
@@ -104,11 +204,21 @@ export function attachWebSocketGateway(httpServer, roomManager, config) {
               asteroidCount: 7,
             })
           }
+          ensureRoomSnapshotHook(room)
 
-          const player = { id: state.id, name: msg.name, socket }
+          const numericId = room.allocateNumericId()
+          const player = { id: state.id, numericId, name: msg.name, socket, state }
           room.join(player)
           state.player = player
           state.room = room
+
+          socket.send(
+            encodeServerMessage(MSG_TYPES.WELCOME, {
+              playerId: numericId,
+              seed: room.match.seed,
+              room: room.id,
+            }),
+          )
 
           const rosterMsg = encodeServerMessage(MSG_TYPES.ROSTER, {
             room: room.id,
@@ -117,7 +227,7 @@ export function attachWebSocketGateway(httpServer, roomManager, config) {
           broadcastRoom(room, rosterMsg, { critical: true })
 
           const sysMsg = encodeServerMessage(MSG_TYPES.SYSTEM, {
-            text: `${player.name} joined ${room.name}`,
+            text: `${player.name} [#${numericId}] joined ${room.name}`,
           })
           broadcastRoom(room, sysMsg, { critical: false })
         } catch (err) {
@@ -126,18 +236,7 @@ export function attachWebSocketGateway(httpServer, roomManager, config) {
         return
       }
 
-      if (msg.type === MSG_TYPES.CHAT) {
-        if (!state.room || !state.player) {
-          socket.close(1008, 'Must join a room before chatting')
-          return
-        }
-        state.room.postChat(state.player, msg.text)
-        const chatPacket = encodeServerMessage(MSG_TYPES.CHAT, {
-          sender: state.player.name,
-          text: msg.text,
-        })
-        broadcastRoom(state.room, chatPacket, { critical: false })
-      }
+      processIncomingCommand(msg)
     })
 
     socket.on('close', () => {

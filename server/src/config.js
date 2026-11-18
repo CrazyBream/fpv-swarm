@@ -23,6 +23,6 @@ export const config = Object.freeze({
   maxPayloadBytes: 2048,
   joinTimeoutMs: 5000,
   heartbeatIntervalMs: 15000,
-  rateLimitPerSec: 12,
+  rateLimitPerSec: 120,
   slowClientThresholdBytes: 65536,
 })
