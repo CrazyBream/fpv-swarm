@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="public/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FPV Swarm — Multiplayer Tactical Arena</title>
+</head>
+<body>
+<canvas id="arena-canvas"></canvas>
+<button id="exit-btn" type="button">[ESC] ВИЙТИ З ГРИ</button>
+
+<aside id="comms-panel">
+    <div class="comms-header">
+        <span id="ws-indicator">WS: OFFLINE</span>
+        <span id="roster-count">PILOTS: 0</span>
+    </div>
+    <div id="roster-list" class="roster-list"></div>
+    <div id="chat-log" class="chat-log"></div>
+    <form id="chat-form" class="chat-form">
+        <input id="chat-input" type="text" placeholder="Send tactical message..." maxlength="160" />
+        <button type="submit">SEND</button>
+    </form>
+</aside>
+
+<div id="lobby-root"></div>
+
+<div id="exit-overlay">
+    <h2>// СЕСІЮ ЗАВЕРШЕНО //</h2>
+    <p>Ігровий цикл зупинено, WebSocket закрито, слухачі очищено.</p>
+    <button id="restart-btn" type="button">ПОВЕРНУТИСЯ У ЛОБІ</button>
+</div>
+
+<div id="error-Banner">
+    <span id="error-text"></span>
+    <button id="retry-load-btn" type="button">RETRY CLEAN LOAD</button>
+</div>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
