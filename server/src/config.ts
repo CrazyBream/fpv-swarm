@@ -6,7 +6,7 @@ const EnvSchema = z.object({
   HOST: z.string().default('127.0.0.1'),
   LOG_DIR: z.string().default('./logs'),
   MAX_ROOMS: z.coerce.number().int().positive().default(12),
-  MAX_PLAYERS_PER_ROOM: z.coerce.number().int().positive().default(8),
+  MAX_PLAYERS_PER_ROOM: z.coerce.number().int().positive().default(160),
 })
 
 export interface ServerConfig {

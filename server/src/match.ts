@@ -41,6 +41,13 @@ export interface ServerBullet {
   ttl: number
 }
 
+export function computePercentile(samples: readonly number[], p: number): number {
+  if (samples.length === 0) return 0
+  const sorted = [...samples].sort((a, b) => a - b)
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.floor((p / 100) * sorted.length)))
+  return sorted[idx] ?? 0
+}
+
 export class Match {
   readonly seed: number
   readonly tickRate: number
@@ -53,8 +60,10 @@ export class Match {
   #timer: ReturnType<typeof setTimeout> | null = null
   #nextTickAt = 0
   #nextEntityId = 500
+  #tickHistoryMs: number[] = []
 
   readonly onSnapshot?: (match: Match) => void
+  readonly onBeforeStep?: (match: Match, dt: number) => void
   readonly ships = new Map<EntityId, ServerShip>()
   readonly bullets = new Map<EntityId, ServerBullet>()
   lastTickDurationMs = 0
@@ -64,10 +73,12 @@ export class Match {
     seed = 1337,
     tickRate = 30,
     onSnapshot,
+    onBeforeStep,
   }: {
     seed?: number
     tickRate?: number
     onSnapshot?: (match: Match) => void
+    onBeforeStep?: (match: Match, dt: number) => void
   } = {}) {
     this.seed = seed
     this.tickRate = tickRate
@@ -75,6 +86,7 @@ export class Match {
     this.stepMs = 1000 / tickRate
     this.#rng = mulberry32(seed)
     this.onSnapshot = onSnapshot
+    this.onBeforeStep = onBeforeStep
   }
 
   addPlayerShip(numericId: EntityId, name: string): ServerShip {
@@ -109,6 +121,14 @@ export class Match {
     }
   }
 
+  getTickStats() {
+    return {
+      p50Ms: Number(computePercentile(this.#tickHistoryMs, 50).toFixed(3)),
+      p95Ms: Number(computePercentile(this.#tickHistoryMs, 95).toFixed(3)),
+      p99Ms: Number(computePercentile(this.#tickHistoryMs, 99).toFixed(3)),
+    }
+  }
+
   start(): void {
     if (this.#running) return
     this.#running = true
@@ -124,6 +144,10 @@ export class Match {
       const t0 = performance.now()
       this.step(this.stepSec)
       this.lastTickDurationMs = performance.now() - t0
+      this.#tickHistoryMs.push(this.lastTickDurationMs)
+      if (this.#tickHistoryMs.length > 300) {
+        this.#tickHistoryMs.shift()
+      }
 
       this.#nextTickAt += this.stepMs
       const delay = Math.max(0, this.#nextTickAt - performance.now())
@@ -142,6 +166,7 @@ export class Match {
 
   step(dt: number): void {
     this.tick = asTick(this.tick + 1)
+    this.onBeforeStep?.(this, dt)
 
     for (const ship of this.ships.values()) {
       if (ship.cooldown > 0) {

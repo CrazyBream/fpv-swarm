@@ -1,13 +1,14 @@
 {
   "name": "@fpv-swarm/shared",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.7.0",
   "type": "module",
   "exports": {
     "./protocol.ts": "./src/protocol.ts",
     "./sim/vector.ts": "./src/sim/vector.ts",
     "./sim/prng.ts": "./src/sim/prng.ts",
     "./sim/kinematics.ts": "./src/sim/kinematics.ts",
+    "./sim/pool.ts": "./src/sim/pool.ts",
     "./codec/binary.ts": "./src/codec/binary.ts"
   },
   "dependencies": {

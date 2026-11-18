@@ -3,6 +3,7 @@ import { createReadStream } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import http from 'node:http'
 import path from 'node:path'
+import { performance } from 'node:perf_hooks'
 import { pipeline } from 'node:stream/promises'
 import { benchmarkCodecs } from '@fpv-swarm/shared/codec/binary.ts'
 import { z } from 'zod'
@@ -156,10 +157,34 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === 'GET' && pathname === '/api/stats') {
+    const elu = performance.eventLoopUtilization()
     sendJson(res, 200, {
+      rssMb: Number((process.memoryUsage().rss / (1024 * 1024)).toFixed(2)),
+      heapUsedMb: Number((process.memoryUsage().heapUsed / (1024 * 1024)).toFixed(2)),
+      eventLoopUtilization: Number((elu.utilization * 100).toFixed(2)),
       rooms: roomManager.listSummaries(),
       codecBenchmark4Players: benchmarkCodecs(4),
     })
+    return
+  }
+
+  if (req.method === 'POST' && pathname.startsWith('/api/rooms/') && pathname.endsWith('/bots')) {
+    const parts = pathname.split('/')
+    const roomId = parts[3] ?? 'sector-alpha'
+    const room = roomManager.get(roomId)
+    if (!room) {
+      sendJson(res, 404, { error: 'Room not found' })
+      return
+    }
+    try {
+      const rawBody = (await readJsonBody(req, 1024)) as { count?: number }
+      const count = Number(rawBody?.count ?? 8)
+      const activeBots = room.spawnBots(count)
+      sendJson(res, 200, { roomId: room.id, bots: activeBots, roster: room.getRoster() })
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Invalid bot request'
+      sendJson(res, 400, { error: msg })
+    }
     return
   }
 

@@ -1,3 +1,4 @@
+import { ObjectPool } from '@fpv-swarm/shared/sim/pool.ts'
 import type { InputController } from '../input.ts'
 import { Bullet, Entity, type ShipTarget, attachHoming } from './entity.ts'
 import { Vector2 } from './vector.ts'
@@ -15,6 +16,15 @@ export const DRONE_SPECS = Object.freeze({
 export interface BulletSpawnerWorld {
   spawn<T extends Entity>(entity: T): T
 }
+
+export const bulletPool = new ObjectPool<Bullet>(
+  () => new Bullet({ x: 0, y: 0, vx: 0, vy: 0, angle: 0 }),
+  (b) => {
+    b.alive = false
+    b.homing = null
+  },
+  64,
+)
 
 export class Ship extends Entity implements ShipTarget {
   #hp: number
@@ -94,7 +104,7 @@ export class Ship extends Entity implements ShipTarget {
     const nosePos = this.pos.add(forward.scale(this.radius + 6))
     const bulletVel = forward.scale(DRONE_SPECS.muzzleSpeed).add(this.vel)
 
-    const bullet = new Bullet({
+    const bullet = bulletPool.acquire().reset({
       x: nosePos.x,
       y: nosePos.y,
       vx: bulletVel.x,

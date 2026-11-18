@@ -115,6 +115,37 @@ export class Bullet extends Entity {
     this.ttl = ttl
     this.damage = damage
   }
+  reset({
+    x,
+    y,
+    vx,
+    vy,
+    angle,
+    ownerId = null,
+    ttl = 1.35,
+    damage = 25,
+  }: {
+    x: number
+    y: number
+    vx: number
+    vy: number
+    angle: number
+    ownerId?: EntityId | null
+    ttl?: number
+    damage?: number
+  }): this {
+    this.pos = new Vector2(x, y)
+    this.prevPos = new Vector2(x, y)
+    this.vel = new Vector2(vx, vy)
+    this.angle = angle
+    this.prevAngle = angle
+    this.ownerId = ownerId
+    this.ttl = ttl
+    this.damage = damage
+    this.alive = true
+    this.homing = null
+    return this
+  }
 
   override update(dt: number, world?: SimWorldView): void {
     super.update(dt, world)

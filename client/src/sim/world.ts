@@ -14,6 +14,7 @@ import {
   type SimWorldView,
   attachHoming,
 } from './entity.ts'
+import { bulletPool } from './ship.ts'
 import { type Ship, integrate } from './ship.ts'
 
 const PICKUP_TYPES: readonly PickupEffectType[] = ['rapid_fire', 'homing_ammo', 'shield_repair']
@@ -277,6 +278,10 @@ export class World implements SimWorldView {
       }
     }
     for (const id of this.#pendingRemoval) {
+      const entity = this.#entities.get(id)
+      if (entity?.kind === 'bullet') {
+        bulletPool.release(entity as Bullet)
+      }
       this.#entities.delete(id)
     }
     this.#pendingRemoval.clear()

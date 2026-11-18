@@ -35,6 +35,9 @@ const togglePredBtn = document.querySelector<HTMLButtonElement>('#toggle-pred-bt
 const toggleReconBtn = document.querySelector<HTMLButtonElement>('#toggle-recon-btn')
 const toggleCodecBtn = document.querySelector<HTMLButtonElement>('#toggle-codec-btn')
 const toggleDriftBtn = document.querySelector<HTMLButtonElement>('#toggle-drift-btn')
+const spawnBotsBtn = document.querySelector<HTMLButtonElement>('#spawn-bots-btn')
+const currentRoomId = 'sector-alpha'
+let botsActive = false
 
 const commsPanel = document.querySelector<HTMLElement>('#comms-panel')
 const wsIndicator = document.querySelector<HTMLElement>('#ws-indicator')
@@ -341,7 +344,16 @@ lobby.addEventListener('joined', (e: Event) => {
   world.populateInitialAsteroids()
   gameLoop.start()
 })
-
+spawnBotsBtn?.addEventListener('click', async () => {
+  botsActive = !botsActive
+  const count = botsActive ? 8 : 0
+  spawnBotsBtn.textContent = botsActive ? 'Clear AI Bots (8)' : 'Spawn 8 AI Bots'
+  await fetch(`/api/rooms/${currentRoomId}/bots`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ count }),
+  })
+})
 exitBtn?.addEventListener('click', exitGame)
 restartBtn?.addEventListener('click', restartGame)
 
