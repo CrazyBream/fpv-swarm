@@ -1,0 +1,18 @@
+services:
+  fpv-swarm:
+    build:
+      context: .
+      args:
+        GIT_SHA: local-compose
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOST: 0.0.0.0
+      LOG_LEVEL: info
+      ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+      MAX_CONNECTIONS_PER_IP: 20
+      MAX_ROOMS: 12
+      MAX_PLAYERS_PER_ROOM: 160
+    stop_grace_period: 10s

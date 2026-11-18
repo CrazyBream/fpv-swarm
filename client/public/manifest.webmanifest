@@ -1,0 +1,18 @@
+{
+  "name": "FPV Swarm — Multiplayer Tactical Arena",
+  "short_name": "FPV Swarm",
+  "description": "Real-time multiplayer FPV drone arena with authoritative 30Hz server and binary netcode.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#070b10",
+  "theme_color": "#10b981",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -118,8 +118,12 @@ export class ServerConnection extends EventTarget {
       }
     })
 
-    this.#socket.addEventListener('close', () => {
-      this.dispatchEvent(new CustomEvent('status', { detail: { connected: false } }))
+    this.#socket.addEventListener('close', (event: CloseEvent) => {
+      this.dispatchEvent(
+        new CustomEvent('status', {
+          detail: { connected: false, code: event.code, reason: event.reason },
+        }),
+      )
       if (this.#shouldReconnect) {
         const delayMs = Math.min(8000, 300 * 2 ** this.#reconnectAttempts + Math.random() * 150)
         this.#reconnectAttempts += 1

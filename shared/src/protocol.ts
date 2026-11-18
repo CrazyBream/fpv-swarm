@@ -189,6 +189,12 @@ export const ServerMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('pong_rtt'),
     clientSentAt: z.number(),
   }),
+  z.object({
+    v: z.number().int(),
+    t: z.number(),
+    type: z.literal('shutdown'),
+    reason: z.string(),
+  }),
 ])
 
 export type ServerMessage = z.infer<typeof ServerMessageSchema>

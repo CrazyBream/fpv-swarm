@@ -58,6 +58,20 @@ soundEngine.bindToWorld(world.events)
 const connection = new ServerConnection()
 const predictor = new NetworkPredictor()
 
+let serverVersion = 'local'
+void fetch('/health')
+  .then((r) => r.json())
+  .then((data: { version?: string }) => {
+    if (data.version) serverVersion = data.version
+  })
+  .catch(() => {})
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    void navigator.serviceWorker.register('/sw.js').catch(() => {})
+  })
+}
+
 function syncNetSimConfig(): void {
   if (!lagPreset) return
   const parts = lagPreset.value.split(',').map(Number)
@@ -105,14 +119,35 @@ function appendChatLine(prefix: string, text: string, color = '#e2e8f0'): void {
 }
 
 connection.addEventListener('status', (e: Event) => {
-  const detail = (e as CustomEvent<{ connected: boolean }>).detail
+  const detail = (e as CustomEvent<{ connected: boolean; code?: number; reason?: string }>).detail
   if (wsIndicator) {
     wsIndicator.textContent = detail.connected ? 'WS: ONLINE' : 'WS: RECONNECTING...'
     wsIndicator.style.color = detail.connected ? '#10b981' : '#f59e0b'
   }
   if (detail.connected) {
     syncNetSimConfig()
+  } else if (detail.code === 1001 || detail.code === 1006) {
+    returnToLobbyWithNotice('Connection lost (server restarted). Returning to lobby...')
   }
+})
+
+function returnToLobbyWithNotice(reason: string): void {
+  if (!gameLoop.isRunning()) return
+  gameLoop.stop()
+  connection.disconnect()
+  if (commsPanel) commsPanel.style.display = 'none'
+  if (netlabBar) netlabBar.style.display = 'none'
+  if (exitBtn) exitBtn.style.display = 'none'
+  lobbyView.show()
+  lobby.startPolling(3000)
+  if (errorText) errorText.textContent = reason
+  if (errorBanner) errorBanner.style.display = 'flex'
+}
+
+connection.addEventListener('shutdown', (e: Event) => {
+  const detail = (e as CustomEvent<{ reason: string }>).detail
+  appendChatLine('SYSTEM', `SERVER SHUTDOWN: ${detail.reason}`, '#f43f5e')
+  returnToLobbyWithNotice(`Server restarted (${detail.reason}). Rejoin when ready.`)
 })
 
 connection.addEventListener('welcome', (e: Event) => {
@@ -292,6 +327,7 @@ function render(alpha: number, telemetry: LoopTelemetry): void {
     predOn: predictor.enablePrediction,
     reconOn: predictor.enableReconciliation,
     driftOn: predictor.breakDeterminism,
+    serverVersion,
   })
 }
 

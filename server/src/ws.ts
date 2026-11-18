@@ -1,3 +1,4 @@
+// noinspection SpellCheckingInspection
 import { Buffer } from 'node:buffer'
 import crypto from 'node:crypto'
 import type http from 'node:http'
@@ -10,6 +11,8 @@ import {
 } from '@fpv-swarm/shared/protocol.ts'
 import { type RawData, type WebSocket, WebSocketServer } from 'ws'
 import type { ServerConfig } from './config.ts'
+import { logger } from './logger.ts'
+import { wsBytesTotal, wsMessagesTotal, wsRejectedTotal } from './metrics.ts'
 import type { Room, RoomManager, RoomPlayer, SocketClientState } from './rooms.ts'
 
 class TokenBucket {
@@ -46,19 +49,77 @@ function rawDataToUint8(raw: RawData): Uint8Array {
   return new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength)
 }
 
+function getClientIp(req: http.IncomingMessage): string {
+  const forwarded = req.headers['x-forwarded-for']
+  if (typeof forwarded === 'string' && forwarded.length > 0) {
+    return forwarded.split(',')[0]?.trim() || 'unknown'
+  }
+  return req.socket.remoteAddress ?? 'unknown'
+}
+
+export function isOriginAllowed(
+  originHeader: string | undefined,
+  reqHost: string | undefined,
+  allowedOrigins: readonly string[],
+): boolean {
+  if (!originHeader) {
+    return true
+  }
+  const normalized = originHeader.trim().replace(/\/$/, '')
+  if (allowedOrigins.includes('*') || allowedOrigins.includes(normalized)) {
+    return true
+  }
+  if (reqHost) {
+    if (normalized === `https://${reqHost}` || normalized === `http://${reqHost}`) {
+      return true
+    }
+  }
+  return false
+}
+
 export function attachWebSocketGateway(
   httpServer: http.Server,
   roomManager: RoomManager,
   config: ServerConfig,
 ) {
+  const connectionsByIp = new Map<string, number>()
+
   const wss = new WebSocketServer({
     server: httpServer,
     path: '/ws',
     maxPayload: config.maxPayloadBytes,
+    verifyClient: (info, done) => {
+      const origin = info.origin || info.req.headers.origin
+      if (!isOriginAllowed(origin, info.req.headers.host, config.allowedOrigins)) {
+        wsRejectedTotal.inc({ reason: 'origin' })
+        logger.warn({ event: 'ws.rejected', reason: 'origin', origin }, 'Rejected foreign origin')
+        done(false, 403, 'Forbidden Origin')
+        return
+      }
+
+      const ip = getClientIp(info.req)
+      const currentCount = connectionsByIp.get(ip) ?? 0
+      if (currentCount >= config.maxConnectionsPerIp) {
+        wsRejectedTotal.inc({ reason: 'ip_cap' })
+        logger.warn({ event: 'ws.rejected', reason: 'ip_cap', ip }, 'Per-IP connection cap reached')
+        done(false, 429, 'Too Many Connections From IP')
+        return
+      }
+
+      done(true)
+    },
   })
 
   const boundRooms = new Set<string>()
   const clientStates = new WeakMap<WebSocket, SocketClientState>()
+
+  function recordOutgoing(payload: string | Buffer): void {
+    wsMessagesTotal.inc({ direction: 'out' })
+    wsBytesTotal.inc(
+      { direction: 'out' },
+      typeof payload === 'string' ? Buffer.byteLength(payload, 'utf8') : payload.byteLength,
+    )
+  }
 
   function sendWithNetSim(
     state: SocketClientState,
@@ -70,6 +131,11 @@ export function attachWebSocketGateway(
 
     if (socket.bufferedAmount > config.slowClientThresholdBytes) {
       if (!critical) return
+      wsRejectedTotal.inc({ reason: 'slow_client' })
+      logger.warn(
+        { event: 'ws.rejected', reason: 'slow_client', playerId: state.id, roomId: state.room?.id },
+        'Slow client buffer overflow',
+      )
       socket.close(1008, 'Slow client buffer overflow')
       return
     }
@@ -84,10 +150,12 @@ export function attachWebSocketGateway(
         : 0
 
     if (totalDelay <= 0) {
+      recordOutgoing(payload)
       socket.send(payload)
     } else {
       setTimeout(() => {
         if (socket.readyState === 1) {
+          recordOutgoing(payload)
           socket.send(payload)
         }
       }, totalDelay)
@@ -117,7 +185,10 @@ export function attachWebSocketGateway(
     })
   }
 
-  wss.on('connection', (socket: WebSocket) => {
+  wss.on('connection', (socket: WebSocket, req: http.IncomingMessage) => {
+    const ip = getClientIp(req)
+    connectionsByIp.set(ip, (connectionsByIp.get(ip) ?? 0) + 1)
+
     const bucket = new TokenBucket(config.rateLimitPerSec)
     const state: SocketClientState = {
       id: crypto.randomUUID().slice(0, 8),
@@ -133,7 +204,10 @@ export function attachWebSocketGateway(
     clientStates.set(socket, state)
 
     socket.on('error', (err: Error) => {
-      console.error(`Socket [${state.id}] error:`, err.message)
+      logger.warn(
+        { event: 'ws.error', playerId: state.id, roomId: state.room?.id, err: err.message },
+        'WebSocket error',
+      )
     })
 
     socket.on('pong', () => {
@@ -142,6 +216,11 @@ export function attachWebSocketGateway(
 
     const joinTimer = setTimeout(() => {
       if (!state.room) {
+        wsRejectedTotal.inc({ reason: 'join_timeout' })
+        logger.warn(
+          { event: 'ws.rejected', reason: 'join_timeout', playerId: state.id },
+          'Join timeout',
+        )
         socket.close(4001, 'Join timeout exceeded (5s)')
       }
     }, config.joinTimeoutMs)
@@ -162,6 +241,7 @@ export function attachWebSocketGateway(
                 name: `Sector ${msg.room}`,
                 asteroidCount: 7,
               })
+              logger.info({ event: 'room.created', roomId: room.id }, 'Room created')
             }
             ensureRoomSnapshotHook(room)
 
@@ -177,14 +257,19 @@ export function attachWebSocketGateway(
             state.player = player
             state.room = room
 
-            socket.send(
-              encodeServerMessage({
-                type: 'welcome',
-                playerId: numericId,
-                seed: room.match.seed,
-                room: room.id,
-              }),
+            logger.info(
+              { event: 'player.joined', roomId: room.id, playerId: state.id, numericId },
+              'Player joined room',
             )
+
+            const welcomePayload = encodeServerMessage({
+              type: 'welcome',
+              playerId: numericId,
+              seed: room.match.seed,
+              room: room.id,
+            })
+            recordOutgoing(welcomePayload)
+            socket.send(welcomePayload)
 
             const rosterMsg = encodeServerMessage({
               type: 'roster',
@@ -200,6 +285,7 @@ export function attachWebSocketGateway(
             broadcastRoom(room, sysMsg, { critical: false })
           } catch (err: unknown) {
             const reason = err instanceof Error ? err.message : 'Join failed'
+            wsRejectedTotal.inc({ reason: 'join_error' })
             socket.close(1008, reason)
           }
           return
@@ -245,6 +331,7 @@ export function attachWebSocketGateway(
 
         case 'chat': {
           if (!state.room || !state.player) {
+            wsRejectedTotal.inc({ reason: 'not_joined' })
             socket.close(1008, 'Must join a room before chatting')
             return
           }
@@ -264,24 +351,58 @@ export function attachWebSocketGateway(
     }
 
     socket.on('message', async (rawBuffer: RawData, isBinary: boolean) => {
+      const bytes = rawDataToUint8(rawBuffer)
+      wsMessagesTotal.inc({ direction: 'in' })
+      wsBytesTotal.inc({ direction: 'in' }, bytes.byteLength)
+
       if (!bucket.consume()) {
+        wsRejectedTotal.inc({ reason: 'rate_limit' })
+        logger.warn(
+          {
+            event: 'ws.rejected',
+            reason: 'rate_limit',
+            playerId: state.id,
+            roomId: state.room?.id,
+          },
+          'Rate limit exceeded',
+        )
         socket.close(1008, 'Rate limit exceeded')
         return
       }
 
       if (isBinary) {
         try {
-          const decodedInput = decodeInputBinary(rawDataToUint8(rawBuffer))
+          const decodedInput = decodeInputBinary(bytes)
           await dispatchClientMessage(decodedInput)
         } catch {
+          wsRejectedTotal.inc({ reason: 'invalid_binary' })
+          logger.warn(
+            {
+              event: 'ws.rejected',
+              reason: 'invalid_binary',
+              playerId: state.id,
+              roomId: state.room?.id,
+            },
+            'Invalid binary frame',
+          )
           socket.close(1003, 'Invalid binary frame')
         }
         return
       }
 
-      const rawText = rawDataToUint8(rawBuffer)
-      const parsed = parseClientMessage(new TextDecoder().decode(rawText), config.maxPayloadBytes)
+      const parsed = parseClientMessage(new TextDecoder().decode(bytes), config.maxPayloadBytes)
       if (!parsed.ok) {
+        wsRejectedTotal.inc({ reason: 'invalid_json' })
+        logger.warn(
+          {
+            event: 'ws.rejected',
+            reason: 'invalid_json',
+            playerId: state.id,
+            roomId: state.room?.id,
+            detail: parsed.reason,
+          },
+          'Invalid JSON frame',
+        )
         socket.close(parsed.code, parsed.reason)
         return
       }
@@ -291,11 +412,23 @@ export function attachWebSocketGateway(
 
     socket.on('close', () => {
       clearTimeout(joinTimer)
+      const prev = connectionsByIp.get(ip) ?? 1
+      if (prev <= 1) {
+        connectionsByIp.delete(ip)
+      } else {
+        connectionsByIp.set(ip, prev - 1)
+      }
+
       if (state.room && state.player) {
         const room = state.room
         const name = state.player.name
         room.leave(state.id)
         state.room = null
+
+        logger.info(
+          { event: 'player.left', roomId: room.id, playerId: state.id },
+          'Player left room',
+        )
 
         const rosterMsg = encodeServerMessage({
           type: 'roster',
@@ -319,6 +452,7 @@ export function attachWebSocketGateway(
       if (!st) continue
       st.missedPongs += 1
       if (st.missedPongs > 2) {
+        wsRejectedTotal.inc({ reason: 'heartbeat_timeout' })
         socket.terminate()
         continue
       }
@@ -328,12 +462,18 @@ export function attachWebSocketGateway(
 
   return {
     wss,
-    close(): Promise<void> {
+    async close(reason = 'Server shutting down for maintenance'): Promise<void> {
       clearInterval(heartbeatTimer)
+      const shutdownFrame = encodeServerMessage({ type: 'shutdown', reason })
       for (const client of wss.clients) {
-        client.close(1001, 'Server shutting down')
+        if (client.readyState === 1) {
+          try {
+            client.send(shutdownFrame)
+          } catch {}
+          client.close(1001, reason)
+        }
       }
-      return new Promise((resolve) => wss.close(() => resolve()))
+      await new Promise<void>((resolve) => wss.close(() => resolve()))
     },
   }
 }

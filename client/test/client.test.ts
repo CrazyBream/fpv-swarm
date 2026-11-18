@@ -246,42 +246,42 @@ describe('World simulation & Entity components', () => {
   })
 })
 describe('Entity, Ship, and Input edge cases', () => {
-    it('tracks Ship damage, death, healing, and resetAt', () => {
-        const ship = new Ship({ x: 100, y: 100, hp: 100 })
-        ship.takeDamage(40)
-        expect(ship.hp).toBe(60)
-        ship.heal(20)
-        expect(ship.hp).toBe(80)
-        ship.takeDamage(100)
-        expect(ship.alive).toBe(false)
-        ship.resetAt(640, 360)
-        expect(ship.alive).toBe(true)
-        expect(ship.hp).toBe(100)
-    })
+  it('tracks Ship damage, death, healing, and resetAt', () => {
+    const ship = new Ship({ x: 100, y: 100, hp: 100 })
+    ship.takeDamage(40)
+    expect(ship.hp).toBe(60)
+    ship.heal(20)
+    expect(ship.hp).toBe(80)
+    ship.takeDamage(100)
+    expect(ship.alive).toBe(false)
+    ship.resetAt(640, 360)
+    expect(ship.alive).toBe(true)
+    expect(ship.hp).toBe(100)
+  })
 
-    it('tracks Asteroid damage and destruction', () => {
-        const ast = new Asteroid({ x: 50, y: 50, vx: 1, vy: 1, hp: 30 })
-        ast.takeDamage(15)
-        expect(ast.hp).toBe(15)
-        expect(ast.alive).toBe(true)
-        ast.takeDamage(20)
-        expect(ast.alive).toBe(false)
-    })
+  it('tracks Asteroid damage and destruction', () => {
+    const ast = new Asteroid({ x: 50, y: 50, vx: 1, vy: 1, hp: 30 })
+    ast.takeDamage(15)
+    expect(ast.hp).toBe(15)
+    expect(ast.alive).toBe(true)
+    ast.takeDamage(20)
+    expect(ast.alive).toBe(false)
+  })
 
-    it('fires rapid fire and homing ammo when timers are active', () => {
-        const world = new World()
-        const ship = new Ship({ x: 200, y: 200 })
-        ship.overclockTimer = 3
-        ship.homingAmmoTimer = 3
-        const b = ship.fire(world)
-        expect(b).not.toBeNull()
-        expect(b?.homing).not.toBeNull()
-        expect(ship.fire(world)).toBeNull()
-    })
+  it('fires rapid fire and homing ammo when timers are active', () => {
+    const world = new World()
+    const ship = new Ship({ x: 200, y: 200 })
+    ship.overclockTimer = 3
+    ship.homingAmmoTimer = 3
+    const b = ship.fire(world)
+    expect(b).not.toBeNull()
+    expect(b?.homing).not.toBeNull()
+    expect(ship.fire(world)).toBeNull()
+  })
 
-    it('Pickup expires after TTL', () => {
-        const p = new Pickup({ x: 10, y: 10, ttl: 0.1 })
-        p.update(0.2)
-        expect(p.alive).toBe(false)
-    })
+  it('Pickup expires after TTL', () => {
+    const p = new Pickup({ x: 10, y: 10, ttl: 0.1 })
+    p.update(0.2)
+    expect(p.alive).toBe(false)
+  })
 })

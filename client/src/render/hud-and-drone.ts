@@ -403,6 +403,7 @@ export interface NetgraphStats {
   readonly predOn: boolean
   readonly reconOn: boolean
   readonly driftOn: boolean
+  readonly serverVersion?: string
 }
 
 export function drawNetgraph(
@@ -424,11 +425,8 @@ export function drawNetgraph(
 
   ctx.fillStyle = '#38bdf8'
   ctx.font = 'bold 13px ui-monospace, SFMono-Regular, Consolas, monospace'
-  ctx.fillText(
-    `NETGRAPH // CODEC: ${netStats.useBinary ? 'BINARY (DataView)' : 'JSON'}`,
-    x + 12,
-    y + 22,
-  )
+  const ver = netStats.serverVersion ? ` | ${netStats.serverVersion.slice(0, 7)}` : ''
+  ctx.fillText(`NETGRAPH // ${netStats.useBinary ? 'BINARY' : 'JSON'}${ver}`, x + 12, y + 22)
 
   ctx.fillStyle = '#f1f5f9'
   ctx.font = '12px ui-monospace, SFMono-Regular, Consolas, monospace'

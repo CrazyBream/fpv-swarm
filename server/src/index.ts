@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer'
-import { createReadStream } from 'node:fs'
+import { createReadStream, existsSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import http from 'node:http'
 import path from 'node:path'
@@ -9,14 +9,18 @@ import { benchmarkCodecs } from '@fpv-swarm/shared/codec/binary.ts'
 import { z } from 'zod'
 import { config } from './config.ts'
 import { createSyntheticReplayStream } from './log/replay.ts'
+import { logger } from './logger.ts'
+import { metricsRegistry, refreshRuntimeMetrics } from './metrics.ts'
 import { RoomManager } from './rooms.ts'
 import { attachWebSocketGateway } from './ws.ts'
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.wav': 'audio/wav',
@@ -88,6 +92,9 @@ const SOUNDS: Record<string, Buffer> = {
   '/assets/explode.wav': createWavBuffer(190, 45, 0.38),
 }
 
+let isReady = false
+let shuttingDown = false
+
 const roomManager = new RoomManager({
   logDir: config.logDir,
   maxRooms: config.maxRooms,
@@ -135,7 +142,7 @@ async function serveStaticFile(res: http.ServerResponse, urlPath: string): Promi
     const ext = path.extname(safePath)
     res.writeHead(200, {
       'Content-Type': MIME_TYPES[ext] ?? 'application/octet-stream',
-      'Cache-Control': 'public, max-age=60',
+      'Cache-Control': relPath === '/sw.js' ? 'no-cache' : 'public, max-age=60',
     })
     await pipeline(createReadStream(safePath), res)
   } catch {
@@ -150,15 +157,42 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && pathname === '/health') {
     sendJson(res, 200, {
       ok: true,
+      version: config.gitSha,
+      env: config.nodeEnv,
       uptimeSec: Math.round(process.uptime()),
       rssMb: Number((process.memoryUsage().rss / (1024 * 1024)).toFixed(2)),
     })
     return
   }
 
+  if (req.method === 'GET' && pathname === '/ready') {
+    const hasClientIndex =
+      config.nodeEnv !== 'production' || existsSync(path.join(config.clientDistDir, 'index.html'))
+    const readyNow = isReady && !shuttingDown && hasClientIndex
+    sendJson(res, readyNow ? 200 : 503, {
+      ready: readyNow,
+      shuttingDown,
+      hasClientIndex,
+      version: config.gitSha,
+    })
+    return
+  }
+
+  if (req.method === 'GET' && pathname === '/metrics') {
+    refreshRuntimeMetrics(roomManager)
+    const body = await metricsRegistry.metrics()
+    res.writeHead(200, {
+      'Content-Type': metricsRegistry.contentType,
+      'Content-Length': Buffer.byteLength(body),
+    })
+    res.end(body)
+    return
+  }
+
   if (req.method === 'GET' && pathname === '/api/stats') {
     const elu = performance.eventLoopUtilization()
     sendJson(res, 200, {
+      version: config.gitSha,
       rssMb: Number((process.memoryUsage().rss / (1024 * 1024)).toFixed(2)),
       heapUsedMb: Number((process.memoryUsage().heapUsed / (1024 * 1024)).toFixed(2)),
       eventLoopUtilization: Number((elu.utilization * 100).toFixed(2)),
@@ -180,6 +214,7 @@ const server = http.createServer(async (req, res) => {
       const rawBody = (await readJsonBody(req, 1024)) as { count?: number }
       const count = Number(rawBody?.count ?? 8)
       const activeBots = room.spawnBots(count)
+      logger.info({ event: 'bots.updated', roomId: room.id, bots: activeBots }, 'Bots updated')
       sendJson(res, 200, { roomId: room.id, bots: activeBots, roster: room.getRoster() })
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Invalid bot request'
@@ -218,6 +253,7 @@ const server = http.createServer(async (req, res) => {
         name: parsed.data.name,
         asteroidCount: parsed.data.asteroidCount,
       })
+      logger.info({ event: 'room.created', roomId: room.id }, 'Room created via HTTP')
       sendJson(res, 201, { room: room.toSummary() })
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Bad request'
@@ -307,23 +343,65 @@ const server = http.createServer(async (req, res) => {
 const wsGateway = attachWebSocketGateway(server, roomManager, config)
 
 server.listen(config.port, config.host, () => {
-  console.log(`FPV Swarm Server listening on http://${config.host}:${config.port}`)
+  isReady = true
+  logger.info(
+    {
+      event: 'server.started',
+      host: config.host,
+      port: config.port,
+      version: config.gitSha,
+    },
+    `FPV Swarm Server listening on http://${config.host}:${config.port}`,
+  )
 })
 
-let shuttingDown = false
 async function gracefulShutdown(signal: string): Promise<void> {
   if (shuttingDown) return
   shuttingDown = true
-  console.log(`\nReceived ${signal}: closing server and flushing match logs...`)
-  server.close()
-  await wsGateway.close()
+  isReady = false
+
+  const forceTimer = setTimeout(() => {
+    logger.fatal({ event: 'server.shutdown_timeout', signal }, 'Forced exit after 9s grace period')
+    process.exit(1)
+  }, 9000)
+  forceTimer.unref()
+
+  logger.info({ event: 'server.shutdown_start', signal }, 'Graceful shutdown started')
+
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve())
+  })
+  await wsGateway.close('Server restarting — please reconnect')
   await roomManager.closeAll()
+
+  logger.info({ event: 'server.shutdown_complete', signal }, 'Graceful shutdown complete')
+  logger.flush()
+  clearTimeout(forceTimer)
   process.exit(0)
 }
 
 process.on('SIGINT', () => {
   void gracefulShutdown('SIGINT')
 })
+
 process.on('SIGTERM', () => {
   void gracefulShutdown('SIGTERM')
+})
+
+process.on('uncaughtException', (err: Error) => {
+  logger.fatal({ event: 'process.uncaughtException', err }, 'Uncaught exception — exiting')
+  logger.flush()
+  process.exit(1)
+})
+
+process.on('unhandledRejection', (reason: unknown) => {
+  logger.fatal(
+    {
+      event: 'process.unhandledRejection',
+      err: reason instanceof Error ? reason : String(reason),
+    },
+    'Unhandled promise rejection — exiting',
+  )
+  logger.flush()
+  process.exit(1)
 })
