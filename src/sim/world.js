@@ -5,14 +5,17 @@ import { integrate } from "./ship.js";
 
 const PICKUP_TYPES = ["rapid_fire", "homing_ammo", "shield_repair"];
 
-export class World {
+export class World extends EventTarget {
 	#entities = new Map();
 	#pendingRemoval = new Set();
 
 	constructor({ width = 1280, height = 720 } = {}) {
+		super();
 		this.width = width;
 		this.height = height;
 		this.score = 0;
+		this.callsign = "GENIY-FPV";
+		this.roomName = "Sector Alpha";
 		this.player = null;
 		this.respawnTimer = 0;
 		this.pickupTimer = 5;
@@ -129,6 +132,16 @@ export class World {
 		return { x: this.width * 0.5, y: this.height * 0.5 };
 	}
 
+	triggerPlayerFire() {
+		if (!this.player?.alive) return;
+		const bullet = this.player.fire(this);
+		if (bullet) {
+			this.dispatchEvent(
+				new CustomEvent("fired", { detail: { bulletId: bullet.id } }),
+			);
+		}
+	}
+
 	step(dt, input) {
 		for (const entity of this.#entities.values()) {
 			entity.savePrevious();
@@ -137,7 +150,7 @@ export class World {
 		if (this.player?.alive) {
 			integrate(this.player, input, dt);
 			if (input.isDown("Space") || input.isDown("KeyJ")) {
-				this.player.fire(this);
+				this.triggerPlayerFire();
 			}
 		} else if (this.player && !this.player.alive) {
 			this.respawnTimer -= dt;
@@ -177,6 +190,15 @@ export class World {
 		}
 	}
 
+	#addScore(points) {
+		this.score += points;
+		this.dispatchEvent(
+			new CustomEvent("scoreChanged", {
+				detail: { score: this.score, delta: points },
+			}),
+		);
+	}
+
 	#resolvePair(a, b) {
 		const pair = [a, b];
 		const bullet = pair.find((e) => e.kind === "bullet");
@@ -195,14 +217,25 @@ export class World {
 					count: 8,
 				}),
 			);
+			this.dispatchEvent(
+				new CustomEvent("hit", {
+					detail: { x: bullet.pos.x, y: bullet.pos.y },
+				}),
+			);
+
 			if (!asteroid.alive) {
-				this.score += asteroid.homing ? 150 : 100;
+				this.#addScore(asteroid.homing ? 150 : 100);
 				this.spawn(
 					new Explosion({
 						x: asteroid.pos.x,
 						y: asteroid.pos.y,
 						color: "#f59e0b",
 						count: 22,
+					}),
+				);
+				this.dispatchEvent(
+					new CustomEvent("exploded", {
+						detail: { x: asteroid.pos.x, y: asteroid.pos.y },
 					}),
 				);
 			}
@@ -220,6 +253,10 @@ export class World {
 					count: 20,
 				}),
 			);
+			this.dispatchEvent(
+				new CustomEvent("hit", { detail: { x: ship.pos.x, y: ship.pos.y } }),
+			);
+
 			if (!ship.alive) {
 				this.spawn(
 					new Explosion({
@@ -227,6 +264,11 @@ export class World {
 						y: ship.pos.y,
 						color: "#10b981",
 						count: 32,
+					}),
+				);
+				this.dispatchEvent(
+					new CustomEvent("exploded", {
+						detail: { x: ship.pos.x, y: ship.pos.y },
 					}),
 				);
 				this.respawnTimer = 2.0;
@@ -239,13 +281,18 @@ export class World {
 				pickup.pickupEffect.apply(ship);
 			}
 			pickup.alive = false;
-			this.score += 50;
+			this.#addScore(50);
 			this.spawn(
 				new Explosion({
 					x: pickup.pos.x,
 					y: pickup.pos.y,
 					color: "#a855f7",
 					count: 12,
+				}),
+			);
+			this.dispatchEvent(
+				new CustomEvent("hit", {
+					detail: { x: pickup.pos.x, y: pickup.pos.y },
 				}),
 			);
 			return;
