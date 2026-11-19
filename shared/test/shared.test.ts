@@ -463,6 +463,9 @@ describe('Property-Based Tests (fast-check)', () => {
         (angle) => {
           const q = quantizeAngle(angle)
           const restored = dequantizeAngle(q)
+          let diff = restored - angle
+          while (diff > Math.PI) diff -= Math.PI * 2
+          while (diff < -Math.PI) diff += Math.PI * 2
           expect(Math.abs(restored - angle)).toBeLessThanOrEqual(0.0011)
         },
       ),
