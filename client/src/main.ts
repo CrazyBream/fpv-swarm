@@ -267,33 +267,31 @@ retryLoadBtn?.addEventListener('click', () => {
   void runAssetPipeline('none')
 })
 
-
-
 let pendingMouseFire = false
 
 const handleMouseDown = (e: MouseEvent): void => {
-    if (e.target !== canvas) return
-    soundEngine.unlock()
-    if (gameLoop.isRunning()) {
-        world.triggerPlayerFire()
-        pendingMouseFire = true
-    }
+  if (e.target !== canvas) return
+  soundEngine.unlock()
+  if (gameLoop.isRunning()) {
+    world.triggerPlayerFire()
+    pendingMouseFire = true
+  }
 }
 canvas.addEventListener('mousedown', handleMouseDown)
 
 function simulate(dt: number): void {
-    const turnLeft = input.isDown('KeyA') || input.isDown('ArrowLeft')
-    const turnRight = input.isDown('KeyD') || input.isDown('ArrowRight')
-    const throttleUp = input.isDown('KeyW') || input.isDown('ArrowUp')
-    const throttleBack = input.isDown('KeyS') || input.isDown('ArrowDown')
-    const fire = input.isDown('Space') || input.isDown('KeyJ') || pendingMouseFire
-    pendingMouseFire = false
+  const turnLeft = input.isDown('KeyA') || input.isDown('ArrowLeft')
+  const turnRight = input.isDown('KeyD') || input.isDown('ArrowRight')
+  const throttleUp = input.isDown('KeyW') || input.isDown('ArrowUp')
+  const throttleBack = input.isDown('KeyS') || input.isDown('ArrowDown')
+  const fire = input.isDown('Space') || input.isDown('KeyJ') || pendingMouseFire
+  pendingMouseFire = false
 
-    const rawCmd = {
-        turn: (turnRight ? 1 : 0) - (turnLeft ? 1 : 0),
-        thrust: (throttleUp ? 1 : 0) - (throttleBack ? 1 : 0),
-        fire,
-    }
+  const rawCmd = {
+    turn: (turnRight ? 1 : 0) - (turnLeft ? 1 : 0),
+    thrust: (throttleUp ? 1 : 0) - (throttleBack ? 1 : 0),
+    fire,
+  }
 
   world.step(dt, input)
 
@@ -312,12 +310,12 @@ function simulate(dt: number): void {
 }
 
 function render(alpha: number, telemetry: LoopTelemetry): void {
-    drawWorld(viewport.ctx, world, alpha, loadedAssets)
-    const remotes = predictor
-        .getInterpolatedRemotes()
-        .filter((e) => !(e.kind === 'bullet' && e.ownerId === predictor.localPlayerId))
-    drawRemoteEntities(viewport.ctx, remotes, loadedAssets?.sprites.sheet)
-    drawHud(viewport.ctx, telemetry, world, lastScoreDelta)
+  drawWorld(viewport.ctx, world, alpha, loadedAssets)
+  const remotes = predictor
+    .getInterpolatedRemotes()
+    .filter((e) => !(e.kind === 'bullet' && e.ownerId === predictor.localPlayerId))
+  drawRemoteEntities(viewport.ctx, remotes, loadedAssets?.sprites.sheet)
+  drawHud(viewport.ctx, telemetry, world, lastScoreDelta)
 
   const snapAgeMs =
     predictor.lastSnapshotReceivedAt > 0 ? performance.now() - predictor.lastSnapshotReceivedAt : 0

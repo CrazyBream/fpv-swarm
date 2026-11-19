@@ -1,495 +1,140 @@
-# FPV Swarm — Lab 01: The Event Loop Is the Game Loop
+# FPV Swarm — Real-Time Multiplayer Tactical Arena (`v1.0.0`)
 
-Тактичний симулятор польоту FPV-квадрокоптера на Canvas 2D з детермінованим фіксованим кроком симуляції (`60 Hz`), інтерполяцією рендеру (`alpha`) та OSD-телеметрією в реальному часі.
+![CI](https://github.com/CrazyBream/fpv-swarm/actions/workflows/typecheck.yml/badge.svg)
 
-## Налаштування фізики FPV-дрона (Milestone 2)
-У модулі `src/sim/ship.js` я налаштував параметри руху під динаміку легкого FPV-квадрокоптера:
-- `yawRate = 4.4` рад/с — висока кутова швидкість повороту для різких маневрів.
-- `forwardThrust = 640` пкс/с² та `reverseThrust = 300` пкс/с² — швидкий набір швидкості та можливість гальмування реверсом (`S` / `ArrowDown`).
-- `airDrag = 1.55` — підвищений опір повітря, який гасить бокове ковзання (дрейф) після повороту.
-- `terminalSpeed = 440` пкс/с — обмеження максимальної горизонтальної швидкості.
+> **Live Demo (`wss://`):** https://fpv-swarm-arena.onrender.com  
+> **Health & Metrics:** `/health` · `/ready` · `/metrics`  
+> **Demo Video (3–5 min):** `https://youtu.be/roykdndBO9Q`  
 
-## Керування
-- **W / S** або **↑ / ↓** — тяга вперед / реверс
-- **A / D** або **← / →** — поворот (Yaw)
-- **Space / J / Лівий клік** — вогонь (починаючи з Lab 02)
-- **P** — пауза / продовження симуляції (через `input.justPressed`)
-- **Esc** або кнопка **[ESC] ВИЙТИ З ГРИ** — завершення сесії з відпискою від усіх слухачів подій (`destroy()`)
 
-## Як запустити
-
-    npm install
-    npm run dev
-    npm run lint
+![Gameplay Preview](doc/gameplay.gif)
 
 ---
 
-## Milestone 4 — Результати трьох експериментів («Break it on purpose, then measure»)
+## Як грати
+- **WASD / Стрілки** — тяга, гальмування та поворот дрона.
+- **Space / J / ЛКМ** — стрільба (у PvP-режимі постріли синхронізуються з сервером і завдають шкоди іншим гравцям та ботам).
+- **Підсилення на арені:** `[RPM]` Rapid Fire, `[AIM]` Homing Ammo, `[+HP]` Repair.
+- **P** — пауза локальної симуляції · **Esc** — вихід у лобі.
+- **Netlab Bar (знизу зліва):** інжектор затримки/джиттеру/втрати пакетів, перемикачі `Prediction`, `Reconcile`, `Codec (BINARY/JSON)`, `Math.random Bug` та кнопка `Spawn 8 AI Bots`.
+- **PWA:** застосунок підтримує встановлення з браузера (`manifest.webmanifest` + Service Worker `sw.js`) на десктоп і телефон.
 
-Базові показники в штатному режимі на моєму моніторі **144 Hz**:
-- `steps/s`: **60**
-- `frames/s`: **143 – 144**
-- `frame ms`: **6.70 – 7.00 ms** (`1000 / 144 ≈ 6.94 ms`)
-
----
-
-### Експеримент 1: Синхронне блокування потоку (`100 ms` busy-wait кожен 60-й кадр)
-**Що я зробив:** У функцію `render()` я додав синхронний цикл `while (performance.now() < t + 100) {}` кожен 60-й кадр.
-
-**Виміряні показники HUD та поведінка:**
-- На моніторі 144 Hz кожні 60 кадрів (~0.42 с) відбувається помітний візуальний фріз на **100 ms**.
-- Загальний лічильник `frames/s` просідає зі `144` до **`120`** (оскільки ~14 кадрів VSync втрачаються під час кожного блокування).
-- При цьому `steps/s` залишається стабільним (**`60 – 61`**): після завершення 100-мілісекундного блокування акумулятор накопичує пропущений час і цикл `while (accumulator >= step)` виконує серію кроків симуляції поспіль перед наступним малюванням.
-
-**Пояснення через Event Loop:**
-JavaScript виконується в одному потоці за принципом *run-to-completion*. Поки синхронний цикл `while` крутиться на **Call Stack**, стек не спорожнюється. Протягом цих 100 мс Event Loop не може перейти ні до **Microtask Queue**, ні до **Task Queue** (події клавіатури `keydown`/`keyup` чекають у черзі), ні до фази **Render steps** (`requestAnimationFrame` → Style → Layout → Paint). Жоден код у цьому ж потоці не може витіснити або обійти зайнятий Call Stack.
-
----
-
-### Експеримент 2: `setInterval(frame, 16)` замість `requestAnimationFrame`
-**Що я зробив:** Я замінив `requestAnimationFrame` на таймер `setInterval(..., 16)` (а також перевірив поведінку при неконтрольованій генерації колбеків таймера без VSync та у фоновій вкладці).
-
-**Виміряні показники:**
-- **В активній вкладці:**
-    - `setInterval(..., 16)` обмежує частоту викликів до ~62.5 разів/с (на 144 Hz моніторі втрачається більш ніж половина плавності екрана) і дає постійний джиттер часу кадру, бо макрозадачі з **Task Queue** не прив'язані до апаратного VSync (`6.94 ms`).
-    - Якщо ж таймери накладаються один на одного без синхронізації з VSync, `frames/s` злітає до **`34 989 – 37 643`** викликів/с (`frame ms : 0.00 ms`), навантажуючи ядро ЦП на холості перемальовки, тоді як фізика завдяки акумулятору все одно тримає рівно **`60 – 61 steps/s`**.
-- **У фоновій вкладці (5 с):**
-    - `requestAnimationFrame` повністю зупиняє рендер у неактивній вкладці, а при поверненні `Math.min(elapsedSec, 0.25)` запобігає зависанню.
-    - `setInterval` продовжує генерувати макрозадачі у фоні (тротлячись браузером до ~1 виклику/с) і даремно просуває симуляцію ривками.
+## Локальний запуск (3 команди)
+```bash
+git clone [https://github.com/CrazyBream/fpv-swarm.git](https://github.com/CrazyBream/fpv-swarm.git) && cd fpv-swarm
+npm ci && npm run build
+npm start
+```
+Або у production-контейнері Docker:
+```bash
+docker compose up --build
+```
+Після запуску гра доступна на `http://localhost:3000`.
 
 ---
 
-### Експеримент 3: Змінний крок (`simulate(dt)`) проти фіксованого при 6× CPU Throttling
-**Що я зробив:** Я запустив автоматичний 5-секундний тест прямолінійного розгону дрона зі стартової точки `x = 200` (`angle = 0`, затиснута клавіша `KeyW` рівно 5000 мс). Я порівняв кінцеву позицію `x` та швидкість `vx` з фіксованим кроком (`step = 1/60`) і зі змінним кроком (`simulate(elapsedSec)` раз на кадр) без обмеження ЦП та з увімкненим **6-кратним сповільненням ЦП** у Chrome DevTools.
+## Архітектура системи
+```mermaid
+flowchart LR
+  subgraph Client["Browser Client (Canvas 2D + Web Audio + PWA)"]
+    Input["Input 60 Hz (WASD + Mouse)"] --> Pred["Client Prediction + Reconciliation"]
+    Pred --> Render["144 Hz Render + Entity Interpolation (66 ms)"]
+  end
 
-| Режим симуляції | Режим ЦП (DevTools) | `steps/s` | `frames/s` | Кінцева позиція `x` (через 5 с, з урахуванням wrap) | Кінцева швидкість `vx` | Різниця (`Δx`) |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| **Фіксований крок (`1/60`)** | Без обмежень (1×) | 60 | 144 | **`620.29 px`** | `407.42 px/s` | — |
-| **Фіксований крок (`1/60`)** | 6× сповільнення ЦП | 60 | 144 | **`620.29 px`** | `407.42 px/s` | **`0.00 px` (100% збіг!)** |
-| **Змінний крок (`dt`)** | Без обмежень (1×) | 144 | 144 | **`628.98 px`** | `410.51 px/s` | **`+8.69 px` від еталону** |
-| **Змінний крок (`dt`)** | 6× сповільнення ЦП | 139 | 139 | **`625.94 px`** | `410.51 px/s` | **`-3.04 px` між запусками** |
+  subgraph Shared["@fpv-swarm/shared (Strict TypeScript)"]
+    Sim["Deterministic Kinematics + mulberry32 + ObjectPool"]
+    Proto["Zod Schemas + DataView Binary Codec (LE)"]
+  end
 
-**Висновок:**
-1. Із **фіксованим кроком (`1/60` с)** обидва запуски привели дрон у **абсолютно ідентичну точку `x = 620.29` зі швидкістю `vx = 407.42`**, оскільки `simulate(1/60)` виконався рівно 300 разів з однаковим аргументом `dt`.
-2. Із **змінним кроком (`simulate(dt)`)** фізика залежить від FPS (`steps/s` став рівним `frames/s = 139..144`). Навіть невелике просідання зі 144 до 139 FPS під 6× тротлінгом ЦП дало розбіжність координати на **3.04 пікселя** (і на **8.69 пікселя** відносно 60-герцової фізики) всього за 5 секунд польоту через дискретну інтеграцію Ейлера та експоненціальний опір повітря `Math.exp(-airDrag * dt)`. У мультиплеєрній грі це призвело б до повної десинхронізації позицій гравців із різними моніторами та процесорами.
+  subgraph Server["Authoritative Node.js Server (30 Hz)"]
+    WS["ws Gateway (Origin check, IP cap, Token Bucket)"] --> Match["Match Loop (Absolute-target 30 Hz + AI Bots)"]
+    Obs["pino JSON stdout + /metrics (Prometheus) + /health + /ready"]
+  end
 
----
-
-# Lab 02 — Objects, Prototypes, and `this`: The Entity Model
-
-## Архітектура сутностей та менеджера світу (M1 – M3)
-- **`Vector2` (`src/sim/vector.js`):** я реалізував чисті методи (`add`, `sub`, `scale`, `length`, `normalize`, `rotate`, `dot`, `Vector2.fromAngle`), які повертають нові вектори без мутації вхідних операндів, а також `addInPlace` / `scaleInPlace` для гарячих ділянок циклу.
-- **`Entity` та однорівневе наслідування (`src/sim/entity.js`, `src/sim/ship.js`):** базовий клас `Entity` інкапсулює приватний статичний лічильник `static #nextId = 1` та приватне поле `#id` (доступне лише через геттер `get id()`). Клас `Ship extends Entity` використовує рівно один рівень `extends` і зберігає здоров'я у приватному полі `#hp` із публічним геттером `get hp()`.
-- **`World` на базі `Map` (`src/sim/world.js`):** менеджер сутностей зберігає активні об'єкти у `#entities = new Map()`, реалізує протокол ітерації `*[Symbol.iterator]()` та генератор `*ofKind(kind)` для фільтрації без створення проміжних масивів. Видалення реалізовано через відкладений `sweep()` зі списком `#pendingRemoval = new Set()` у кінці кроку симуляції.
-- **Колізії (`src/sim/collision.js`):** я виділив перевірку перетинів у окрему чисту систему `detectCollisions(world)`, яка повертає пари `[a, b]` перетинів кіл.
-
----
-
-## Проблема втрати контексту `this` при стрільбі (Milestone 2)
-
-### Як виникає баг
-Якщо підключити метод класу `Ship.prototype.fire` напряму як обробник події DOM або таймера:
-
-    canvas.addEventListener('mousedown', player.fire)
-
-під час кліку мишею виникає помилка `TypeError: Cannot read properties of undefined (reading 'cooldown')` або падає перевірка доступу до приватних полів. Причина полягає у **правилах прив'язки `this` у JavaScript**: значення `this` визначається в момент виклику функції (call site), а не в момент її оголошення. Передаючи `player.fire` як посилання на функцію, я втрачаю об'єкт ліворуч від крапки (Implicit binding). Браузер викликає колбек від імені DOM-елемента `canvas` (`this === canvas`), у якого немає методів та приватних полів екземпляра `Ship`.
-
-### Три способи вирішення та їхні компроміси
-1. **Обгортка стрілковою функцією на місці підписки (обраний мною варіант у `src/main.js`):**
-
-       const handleMouseDown = () => world.triggerPlayerFire()
-       canvas.addEventListener('mousedown', handleMouseDown)
-
-    - *Перевага:* стрілкова функція не має власного `this` і захоплює лексичний контекст, а метод `fire` залишається в одному екземплярі на `Ship.prototype`.
-    - *Недолік:* потрібно зберігати посилання на обгортку `handleMouseDown`, щоб потім коректно викликати `removeEventListener` у `exitGame()`.
-
-2. **Явна прив'язка через `Function.prototype.bind`:**
-
-       const boundFire = player.fire.bind(player, world)
-       canvas.addEventListener('mousedown', boundFire)
-
-    - *Перевага:* створює нову функцію з назавжди зафіксованим `this === player` (Explicit binding), яку неможливо перебити навіть через `.call()`.
-    - *Недолік:* створює додатковий об'єкт функції в пам'яті на кожну підписку.
-
-3. **Оголошення методу як поля класу зі стрілковою функцією (`fire = (world) => { ... }`):**
-    - *Перевага:* метод завжди прив'язаний до екземпляра без додаткових обгорток.
-    - *Недолік:* функція створюється наново **на кожному екземплярі** об'єкта, а не лежить в одному екземплярі на `Ship.prototype`. Якщо застосувати це до методів `update` у тисячі куль, споживання пам'яті суттєво зросте.
+  Client <-->|"WSS Binary Frames (14 B up / 16+24N B down)"| Server
+  Shared -.-> Client
+  Shared -.-> Server
+```
 
 ---
 
-## Композиція замість глибокої ієрархії класів (Milestone 4 Design Write-Up)
+## Зведені вимірювання (Labs 05, 07, 08)
 
-### Чому глибоке дерево `extends` ламається
-У Лабораторній №2 мені знадобилися дві механіки, які перетинають межі типів:
-1. **Самонаведення (`homing`)**, яке має працювати і для самонавідних ракет гравця (`Bullet`), і для дронів-перехоплювачів (`Asteroid`).
-2. **Стаціонарні бонуси (`Pickup`)**, які мають позицію, радіус колізії та час життя, але не рухаються за законами корабля і не стріляють.
-
-Якби я будував це на класичному наслідуванні, виникла б проблема ромбовидного дублювання (Diamond Problem):
-- `Entity -> MovingEntity -> HomingEntity -> HomingBullet` та `HomingAsteroid` — але звичайний `Bullet` і звичайний `Asteroid` не потребують самонаведення. Довелося б або дублювати математику довороту вектора швидкості у двох різних гілках (`HomingBullet extends Bullet` і `HomingAsteroid extends Asteroid`), або жорстко вшивати `homing` у базовий `Entity`, засмічуючи всі об'єкти світу.
-- Для `Pickup` ієрархія `Entity -> MovingEntity -> CollidableEntity` змусила б стаціонарний предмет успадковувати непотрібну фізику тяги або створювати окремі підкласи під кожен тип ефекту (`ShieldPickup`, `RapidFirePickup`, `HomingAmmoPickup`).
-
-### Обраний підхід: Композиція через компонентні поля (`src/sim/entity.js`)
-Я обмежив наслідування рівно **одним рівнем** (`Ship`, `Bullet`, `Asteroid`, `Pickup`, `Explosion` напряму розширюють `Entity`), а варіативну поведінку реалізував через незалежні компоненти-об'єкти, що прикріплюються динамічно:
-- **`attachHoming(entity, { targetKind, turnRate, speed })`** — додає до будь-якої сутності (`Bullet` або `Asteroid`) об'єкт `entity.homing` із методом `steer(self, dt, world)`. Під час `Entity.prototype.update` сутність перевіряє `if (this.homing) this.homing.steer(...)`. Таким чином, і ракета гравця (що шукає найближчий `'asteroid'`), і перешкода-перехоплювач (що шукає `'ship'`) використовують **один і той самий код наведення**.
-- **`attachPickup(entity, { type, duration, healAmount })`** — додає до `Pickup` компонент `pickupEffect` із методом `apply(ship)`. Це дозволяє створювати нові види бонусів (`rapid_fire`, `homing_ammo`, `shield_repair`) простою конфігурацією даних без створення нових підкласів.
-
----
-
-# Lab 03 — Asynchronous JavaScript: Promises, `async`/`await`, and the Loading Screen
-
-## 1. Конвеєр ассетів: паралельне (`Promise.allSettled`) проти послідовного завантаження (M1)
-У модулі `src/assets/loader.js` я реалізував завантаження ассетів за маніфестом `/assets/manifest.json` (який віддається через dev-middleware у `vite.config.js`): спрайт-аркуш (`/assets/sprites.svg`), конфігурація арени (`/assets/arena.json`) та 3 звукові WAV-ефекти (`shoot.wav`, `hit.wav`, `explode.wav`), кожен з яких декодується через `audioContext.decodeAudioData()`.
-
-Виміряний час завантаження пака на локальному стенді зі штучними затримками (120–220 мс на ресурс):
-- **Послідовне завантаження (`mode: 'sequential'` з `await` у циклі `for...of`):** **`994.6 ms`** (кожен наступний запит чекає повного завершення попереднього: `120 + 220 + 180 + 160 + 160 + 160 ms`).
-- **Паралельне завантаження (`mode: 'concurrent'` через `Promise.allSettled` з поштучним трекінгом прогресу):** **`348.2 ms`** (усі 5 запитів стартують одночасно після отримання маніфесту, тому загальний час визначається лише найповільнішим ресурсом).
-- **Приріст швидкодії:** паралельне завантаження швидше у **2.85 раза**.
-
-Також я реалізував обгортку `withRetry(fn, { attempts: 3, baseMs: 180, signal })` з експоненційним backoff та випадковим jitter. Помилки клієнта `4xx` (`HttpError` зі статусом `400..499`), `TimeoutError` та `AbortError` прокидаються одразу без повторних спроб.
-
----
-
-## 2. Розв'язання симуляції, звуку та лобі через `EventTarget` (M2 – M3)
-- **Відокремлення симуляції від аудіо та UI (`src/sim/world.js`, `src/audio/audio.js`):** клас `World` розширює вбудований `EventTarget` і має **нуль імпортів** аудіомодуля чи HUD. Під час гри `World` генерує події `CustomEvent` (`"fired"`, `"hit"`, `"exploded"`, `"scoreChanged"`), а модуль `audio.js` підписується на них через `addEventListener` і відтворює декодовані `AudioBuffer` через `AudioBufferSourceNode`.
-- **HTTP-лобі зі скасуванням запитів (`src/lobby/lobby.js`, `src/lobby/lobby-view.js`):** клас `Lobby extends EventTarget` періодично опитує `/api/rooms` кожні 3 секунди з таймаутом `AbortSignal.timeout(2000)`. Коли гравець натискає `LAUNCH DRONE (JOIN)` або залишає лобі, метод `stopPolling()` викликає `this.#abortController.abort()`, миттєво скасовуючи незавершені HTTP-запити. Логіка даних (`lobby.js`) повністю відокремлена від DOM-рендерингу (`lobby-view.js`).
-
----
-
-## 3. П'ять власних головоломок порядку виконання (M4 — Ordering Puzzles)
-
-### Головоломка 1: Базовий `await` та синхронний стек
-
-    async function stepDrone() {
-      console.log('A')
-      await 'tick'
-      console.log('B')
-    }
-    console.log('C')
-    stepDrone()
-    Promise.resolve().then(() => console.log('D'))
-    console.log('E')
-
-- **Вивід:** `C, A, E, B, D`
-- **Пояснення:** `C`, `A`, `E` виконуються синхронно; `await 'tick'` призупиняє `stepDrone` і першим ставить продовження `B` у чергу мікрозадач, а `.then(D)` стає в чергу мікрозадач другим.
-
-### Головоломка 2: `setTimeout` всередині `.then` проти зовнішнього таймера
-
-    setTimeout(() => console.log('T1'), 0)
-    Promise.resolve().then(() => {
-      console.log('M1')
-      setTimeout(() => console.log('T2'), 0)
-    })
-    console.log('S1')
-
-- **Вивід:** `S1, M1, T1, T2`
-- **Пояснення:** Після синхронного `S1` спустошується мікрочерга (`M1`), яка планує макрозадачу `T2` у кінець черги макрозадач — уже після раніше запланованого `T1`.
-
-### Головоломка 3: Ланцюжок `.then` проти паралельного `async/await`
-
-    Promise.resolve()
-      .then(() => console.log('1'))
-      .then(() => console.log('2'))
-    ;(async () => {
-      console.log('3')
-      await Promise.resolve()
-      console.log('4')
-    })()
-
-- **Вивід:** `3, 1, 4, 2`
-- **Пояснення:** `3` друкується синхронно; у мікрочерзі спочатку стоїть `1`, за ним продовження після `await` (`4`), і лише під час виконання `1` у кінець мікрочерги додається `2`.
-
-### Головоломка 4: `requestAnimationFrame` відносно задач і мікрозадач
-
-    requestAnimationFrame(() => console.log('rAF'))
-    setTimeout(() => console.log('Timer'), 0)
-    Promise.resolve().then(() => console.log('Micro'))
-    console.log('Sync')
-
-- **Вивід:** `Sync, Micro, Timer, rAF` (або `Sync, Micro, rAF, Timer` якщо саме в цю мить настав сигнал VSync)
-- **Пояснення:** `Sync` виконується на стеку, `Micro` гарантовано виконується одразу після спорожнення стека до будь-якого рендеру чи таймера, а `rAF` запускається безпосередньо перед фазою Paint.
-
-### Головоломка 5: Поширення помилки та відновлення ланцюжка після `.catch`
-
-    Promise.reject(new Error('404'))
-      .then(() => console.log('ok'))
-      .catch((e) => {
-        console.log('caught:', e.message)
-        return 'fallback-sprite'
-      })
-      .then((val) => console.log('loaded:', val))
-
-- **Вивід:** `caught: 404`, потім `loaded: fallback-sprite`
-- **Пояснення:** Перший `.then` пропускається через стан `rejected`, але `.catch` обробляє помилку і повертає звичайне значення, тому проміс, повернутий із `.catch`, переходить у стан `fulfilled`.
-
----
-
-## 4. Галерея відмов та відновлення (M4 — Failure Gallery)
-Я протестував 4 сценарії збоїв за допомогою вбудованої панелі `M4 Failure Gallery` у лобі:
-1. **404 на спрайт (`Simulate 404 Sprite` → `/assets/missing-404.svg`):** сервер повертає статус `404`, а `loadImage` генерує `HttpError(404)`. Функція `withRetry` розпізнає клієнтський код `4xx` і не робить зайвих повторів; екран завантаження виводить `LOAD FAILED: HttpError: HTTP 404 for /assets/missing-404.svg` та банер із кнопкою `RETRY CLEAN LOAD`.
-2. **Мережевий таймаут (`Simulate Timeout` → `?fail=timeout`, затримка 6000 мс при ліміті 2500 мс):** комбінований сигнал `AbortSignal.any([signal, AbortSignal.timeout(2500)])` перериває запит із помилкою `TimeoutError: signal timed out`, не дозволяючи завантаженню висіти нескінченно.
-3. **Скасування посеред завантаження (`Simulate Abort`):** виклик `activeLoadController.abort()` через 190 мс після старту миттєво перериває активні запити з `AbortError` і коректно очищує слухачі подій.
-4. **Пошкоджений JSON (`Simulate Corrupt JSON` → `?fail=corrupt`):** HTTP-заголовки приходять зі статусом `200 OK` (перший `await fetch()` успішний), але другий асинхронний крок `await response.json()` кидає `SyntaxError`, який перехоплюється після 3 спроб backoff і дозволяє відновити гру кнопкою `RETRY CLEAN LOAD`.
-
-
----
-
-# Lab 04 — Node.js: `EventEmitter`, Streams, and a WebSocket Server
-
-## 1. Архітектура Workspace та HTTP/WebSocket сервера (M1 – M2)
-Я розділив репозиторій на два npm-пакети (`client/` та `server/`) за допомогою `workspaces` у кореневому `package.json`:
-- **`server/src/index.js`:** чистий `node:http` сервер, який роздає статичну збірку `client/dist` із захистом від Path Traversal (`safePath.startsWith(clientDistDir)`), обслуговує `GET /health`, `GET /api/rooms`, `POST /api/rooms` (із лімітом розміру тіла запиту), `GET /api/replays/:id` та обробляє сигнали `SIGINT`/`SIGTERM` для коректного завершення роботи (закриття сокетів та скидання буферів NDJSON-логів на диск).
-- **`server/src/rooms.js`:** клас `Room extends EventEmitter` генерує події `'join'`, `'leave'`, `'chat'`, `'empty'` та `'event'`. `RoomManager` автоматично видаляє порожні користувацькі кімнати та закриває їхні файлові потоки.
-- **`server/src/protocol.js` та `server/src/ws.js`:** протокол версії `v: 0` перевіряє кожен вхідний пакет на розмір (`maxPayload: 2048`), валідність JSON та структуру полів. Реалізовано 5-секундний таймаут очікування `join`, heartbeat `ping`/`pong` кожні 15 с та клієнтський модуль `client/src/net/connection.js` із чергою відправки та експоненційним перепідключенням.
-
----
-
-## 2. Потокові логи матчів та перевірка Backpressure (M3)
-Кожна кімната передає події у `JsonLinesTransform` (`writableObjectMode: true`), з'єднаний через `stream/promises` `pipeline()` із файловим потоком `createWriteStream('logs/<room>-<timestamp>.ndjson')`. Маршрут `GET /api/replays/synthetic?mb=200` транслює 200 МБ NDJSON-логів через `pipeline(createSyntheticReplayStream(200), res)` без буферизації файлу в оперативній пам'яті.
-
-### Графік RSS пам'яті сервера під час завантаження 200 MB логу з обмеженням швидкості (Slow 3G / Throttling)
-
-    RSS (MB)
-     80 |
-     60 |   [Без pipeline / ігнорування write() === false: RSS злітає до >260 MB]
-     50 |                                                                 . '
-     45 |-------------------------------------------------------------. '
-     42 |===*=======*=======*=======*=======*=======*=======*=======*===  <-- pipeline() (~41.8 MB flat)
-     30 |
-      0 +-------+-------+-------+-------+-------+-------+-------+-------> Час (с)
-        0s      5s     10s     15s     20s     25s     30s     35s
-
-- При використанні `pipeline(source, res)` коли повільний клієнт не встигає вичитувати TCP-сокет, буфер сокета перевищує `highWaterMark` і `res.write()` повертає `false`. `pipeline` автоматично призупиняє читання з генератора/файлу до події `'drain'`, тому `process.memoryUsage().rss` тримається стабільно на рівні **41.4 – 42.2 MB** протягом усього завантаження 200 МБ потоку.
-
----
-
-## 3. Фази Event Loop у Node.js, блокування потоку та обробка помилок (M4)
-
-### Фази циклу подій libuv та демонстрація блокування на 300 ms (`/api/slow`)
-Ітерація циклу подій Node.js проходить через фази:
-1. **Timers** — виконання колбеків `setTimeout` та `setInterval`.
-2. **Pending callbacks** — системні I/O колбеки попередньої ітерації.
-3. **Poll** — отримання нових подій I/O (читання сокетів WebSocket, HTTP-запитів, завершення файлових операцій із пулу потоків libuv).
-4. **Check** — виконання колбеків `setImmediate`.
-5. **Close callbacks** — обробники подій `'close'` (наприклад, `socket.on('close')`).
-   Між кожною фазою вичерпуються черги `process.nextTickQueue` (має найвищий пріоритет) та `Promise microtasks`.
-
-**Демонстрація блокування:** я звернувся до тестового маршруту `GET /api/slow?ms=300`, який виконує синхронний цикл на 300 мс, одночасно надсилаючи повідомлення чату з другого вікна браузера. Оскільки JavaScript виконується в одному потоці, цикл затримав фазу **Poll** на всі 300 мс: усі WebSocket-фрейми `chat` та `ping/pong` усіх підключених гравців чекали в буфері ядра ОС і обробилися пачкою лише після завершення запиту `/api/slow`.
-
-### Захист від повільних клієнтів та флуду
-- **Token Bucket (`server/src/ws.js`):** кожне з'єднання має кошик на `12 повідомлень/с`. При перевищенні ліміту сервер закриває сокет із кодом `1008 (Rate limit exceeded)`.
-- **Політика повільного клієнта (`socket.bufferedAmount`):** перед відправкою повідомлення сервер перевіряє `socket.bufferedAmount > 65536`. Якщо буфер переповнений, некритичні повідомлення (чат, системні сповіщення) відкидаються, а при переповненні на критичних пакетах сокет примусово закривається, щоб один повільний клієнт не вичерпав RAM сервера.
-
-### Чому необроблена подія `'error'` валить процес Node.js
-На відміну від браузерного `EventTarget`, у Node.js виклик `emitter.emit('error', err)` без зареєстрованого слухача `.on('error', ...)` кидає неперехоплений виняток і аварійно завершує весь серверний процес:
-
-    node:events:496
-          throw er; // Unhandled 'error' event
-          ^
-    Error: boom
-    Emitted 'error' event on Room instance at: ...
-    Node.js v22.14.0 (exit code 1)
-
-Виправлення: я додав обов'язкові слухачі `socket.on('error', ...)` на кожен WebSocket у `server/src/ws.js` та `room.on('error', ...)` у `server/src/rooms.js`, щоб помилка мережі одного гравця лише логувалася й очищувала його сесію, не зупиняючи гру для інших кімнат.
-
----
-
-# Lab 05 — Real-Time Networking: Authoritative Server, Prediction, and Binary Protocols
-
-## 1. Спільна симуляція (`shared/`) та результати автотестів (M1, M4)
-Я виділив чисту детерміновану фізику польоту (`integrateStep`), генератор псевдовипадкових чисел із зерном (`mulberry32`), константи протоколу та бінарний кодек `DataView` в окремий workspace-пакет `@fpv-swarm/shared`, який імпортується і клієнтом, і Node.js-сервером без залежностей від DOM чи браузерних API.
-
-Результати виконання тестового набору (`npm test` / `node --test server/test/protocol.test.js`):
-- `shared simulation is 100% deterministic over 1,000 steps` — **PASS (`2.8824 ms`)**: прогін 1000 кроків інтеграції з однаковим зерном `mulberry32(42)` дає ідентичний FNV-1a хеш стану.
-- `DataView binary codec round-trips input and snapshot within quantization tolerance` — **PASS (`0.5356 ms`)**: бінарний кадр вводу (`14 B`) та знімок стану (`40 B` для 1 сутності) кодуються й декодуються без втрати точності (похибка квантованого кута `< 0.001 рад`).
-- `JSON protocol validator accepts valid join and rejects oversize frames` — **PASS (`0.1995 ms`)**.
-
----
-
-## 2. Порівняння протоколів JSON проти Binary (`DataView`) (M4)
-Вимірювання виконано на частоті серверного тіку **30 Hz** (30 знімків/с вниз від сервера, 60 команд керування/с вгору від клієнта) у матчі на **3–4 активних гравці** (дані з оверлею `NETGRAPH` та бенчмарку кодеків):
-
-| Codec | Bytes/snapshot (4 ships) | KB/s per client (down, 30 Hz) | KB/s per client (up, 60 Hz) | Encode+decode µs |
+### 1. Протокол: JSON vs Binary `DataView` (Lab 05 — 30 Hz, 4 гравці)
+| Codec | Bytes / snapshot | Down KB/s (30 Hz) | Up KB/s (60 Hz) | Encode + Decode |
 | :--- | :---: | :---: | :---: | :---: |
-| **JSON (`JSON.stringify` / `parse`)** | `468 B` | `13.71 KB/s` | `4.22 KB/s` (`72 B`/input) | `14.85 µs` |
-| **Binary (`ArrayBuffer` + `DataView`)** | **`112 B`** (`88 B` при 3 гравцях) | **`2.63 – 3.28 KB/s`** (реальний замір у грі: `2.72 – 2.87 KB/s`) | **`0.82 – 0.93 KB/s`** (`14 B`/input) | **`2.40 µs`** |
+| JSON | `468 B` | `13.71 KB/s` | `4.22 KB/s` | `14.85 µs` |
+| **Binary (`DataView` LE)** | **`112 B`** | **`3.28 KB/s`** | **`0.82 KB/s`** | **`2.40 µs`** |
 
-- **Специфікація бінарного протоколу (Little-Endian):**
-    - *Клієнтський пакет вводу (`14 байт`):* `Uint8 wireType (1)`, `Uint8 version (1)`, `Uint32 seq`, `Uint32 tick`, `Int8 thrust (-1..1)`, `Int8 turn (-1..1)`, `Uint8 fire (0|1)`, `Uint8 reserved`.
-    - *Серверний знімок стану (`16 байт` заголовок + `24 байти` × кількість сутностей):* заголовок містить `wireType (2)`, `version (1)`, `Uint32 tick`, `Uint32 lastProcessedSeq`, `Uint32 serverTimeMs`, `Uint16 entityCount`. Кожна сутність кодується у 24 байти (`Uint16 id`, `Uint8 kind`, `Uint8 hp`, `Float32 x, y, vx, vy`, `Int16 angleQuantized` у тисячних частках радіана `rad * 1000`, `Uint16 ownerId`).
-- **Економія трафіку:** перехід з JSON на `DataView` зменшив вхідний мережевий потік більш ніж у **4 рази**, а вихідний потік команд керування — у **4.6 раза** (`0.92 KB/s` замість `4.22 KB/s`), прискоривши серіалізацію в **6.1 раза**.
-
----
-
-## 3. Архітектура Netcode та результати вимірювань Netgraph (M1 – M4 Write-Up)
-
-### Три фундаментальні проблеми та як їх вирішує архітектура
-1. **Захист від читерства (Cheating):** клієнт ніколи не надсилає свої координати `(x, y)` — він передає лише вектор намірів `{ seq, tick, thrust, turn, fire }`. Авторитетний сервер у класі `Match` (`server/src/match.js`) валідує діапазони значень (`-1..1`), обмежує частоту пакетів через Token Bucket і сам обчислює позиції та влучання.
-2. **Узгодженість стану (Consistency):** сервер виконує симуляцію на фіксованій частоті **30 Hz** (`33.33 ms`) за допомогою точного таймера відносно цільової часової мітки (`#nextTickAt += this.stepMs`), що виключає накопичення дрейфу `setInterval`.
-3. **Компенсація затримки (Latency):**
-    - **Client-Side Prediction (`client/src/net/reconciler.js`):** клієнт миттєво інтегрує власний дрон локально через спільну функцію `integrateStep`, не чекаючи RTT.
-    - **Server Reconciliation:** кожен відправлений інпут зберігається в буфері `pendingInputs` зі своїм `seq`. Коли приходить знімок за серверний тік із полем `lastProcessedSeq`, клієнт бере авторитетну позицію з пакета, видаляє з буфера підтверджені інпути (`seq <= lastProcessedSeq`) і повторно накочує решту непідтверджених інпутів (`Unacked inputs: 6`).
-
-### Зафіксовані показники Netgraph (при штучній затримці `100 ms ± 30 ms`, `2% drop`)
-Під час тестування трьох підключених пілотів (`GENIY-1 [#21]`, `GENIY-2 [#22]`, `GENIY-FPV [#23]`) у секторі `Sector Alpha` я зафіксував такі показники `NETGRAPH`:
-- **Режим 1 — Без передбачення (`Pred: OFF | Recon: ON | DriftBug: OFF`, тік `9935`):**
-    - `RTT: 63.6 ms | Snap age: 20 ms | In: 2.63 KB/s | Out: 0.93 KB/s`
-    - `Unacked inputs: 0 | Reconcile error: 0.00 px`
-    - *Поведінка:* похибка звірки нульова, оскільки клієнт сліпо копіює серверні знімки, але керування відчувається в'язким (корабель реагує лише через RTT після натискання клавіші, а рух оновлюється з частотою 30 Hz замість 144 FPS).
-- **Режим 2 — З передбаченням та звіркою (`Pred: ON | Recon: ON`):**
-    - Дрон реагує на `WASD` миттєво в кожному кадрі (`144 FPS`, `7.0 ms`), у буфері тримається `Unacked inputs: 6` команд за час польоту пакета туди-назад.
-- **Режим 3 — Навмисний злам детермінізму (`Pred: ON | Recon: ON | DriftBug: ON`, тік `10578`):**
-    - `RTT: 73.9 ms | Snap age: 5 ms | In: 2.72 KB/s | Out: 0.92 KB/s`
-    - `Unacked inputs: 6 | Interp delay: 66 ms | Reconcile error: 10.31 – 29.63 px`
-    - *Поведінка:* через додавання випадкового шуму `Math.random()` до кута повороту на клієнті траєкторія клієнтського передбачення щокроку розходиться з авторитетною траєкторією сервера, що миттєво фіксується червоним індикатором `Reconcile error` у Netgraph.
-
-### Компроміс затримки інтерполяції (Entity Interpolation Delay)
-Для відмальовки союзних та ворожих дронів (`ALLY #21`, `ALLY #22`) я встановив буфер інтерполяції **`Interp delay: 66 ms`** (рівно **2 періоди серверних знімків** при 30 Hz). Клієнт рендерить інші кораблі в точці часу `performance.now() - 66 ms`, лінійно інтерполюючи координати та кут між двома вже отриманими знімками. Це повністю прибирає 30-герцове смикання на 144 Hz моніторі та витримує втрату одного пакета (`2% drop`) або сплеск джиттеру до `±30 ms` ціною лише 66 мс візуальної затримки відображення суперників.
-
----
-
-# Lab 06 — TypeScript: Types for the Protocol, the Simulation, and Both Sides of the Wire
-
-## 1. Єдине джерело правди для протоколу (`shared/src/protocol.ts`) та `strict` конфігурація (M1 – M3)
-Я мігрував усі три пакети воркспейсу (`shared/`, `server/`, `client/`) з JavaScript на TypeScript із максимально суворими налаштуваннями в `tsconfig.base.json`:
-- `"strict": true` (`strictNullChecks`, `noImplicitAny`, `strictFunctionTypes`);
-- `"noUncheckedIndexedAccess": true` — будь-яке звернення за індексом масиву або `Map.get()` повертає `T | undefined`, вимагаючи явної перевірки перед читанням;
-- `"verbatimModuleSyntax": true` — примушує явно розмежовувати імпорти типів (`import type`) та рантайм-значень, які повністю стираються під час компіляції.
-
-У модулі `shared/src/protocol.ts` я видалив старий ручний валідатор із Lab 04 і описав усі повідомлення через декларативні схеми **Zod** (`ClientMessageSchema`, `ServerMessageSchema`). Статичні типи TypeScript автоматично виводяться зі схем через `z.infer<typeof ClientMessageSchema>`, а на межі мережі функція `parseClientMessage(raw: unknown)` використовує `.safeParse()` і повертає тип-результат `ParseResult<ClientMessage>`, гарантуючи відсутність `any` при читанні даних із сокета. Бінарний кодек у `shared/src/codec/binary.ts` типізовано через спільний інтерфейс `Codec<Snapshot>` із двома взаємозамінними реалізаціями (`binarySnapshotCodec` та `jsonSnapshotCodec`).
-
----
-
-## 2. Що знайшов TypeScript під час міграції («What TypeScript found» — M4)
-Під час переходу на `strict` та `noUncheckedIndexedAccess` компілятор `tsc --noEmit` і лінтер виявили 6 реальних проблем у попередньому коді:
-1. **Пастка стандартного `Omit` на об'єднаннях типів (`TS2353` у `server/src/ws.ts`):** коли я типізував `encodeServerMessage(msg: Omit<ServerMessage, 'v' | 't'>)`, компілятор видав помилки на всі поля (`playerId`, `room`, `text`, `sender`, `clientSentAt`), тому що вбудований `Omit` на union-типах залишає лише спільні ключі всіх варіантів (тобто лише `type`). Я виправив це за допомогою власного дистрибутивного умовного типу `DistributiveOmit<T, K>`.
-2. **Небезпечне читання індексів буфера інтерполяції (`client/src/net/reconciler.ts`):** у циклі пошуку опорних знімків `this.snapshots[0]` та `this.snapshots[i - 1]` без `noUncheckedIndexedAccess` вважалися завжди визначеними. TypeScript змусив додати явну перевірку `if (candidateOlder && candidateNewer)` та безпечний фолбек `?? latest`.
-3. **Неоголошена властивість на сокеті у таймері Heartbeat (`server/src/ws.ts`):** раніше лічильник пропущених понгів `socket.missedPongs` прикріплювався динамічно прямо до чужого екземпляра `WebSocket` із бібліотеки `ws`. TypeScript заборонив мутацію неоголошених полів, тому я переніс стан у типізований `WeakMap<WebSocket, SocketClientState>` із перевіркою `if (!st) continue`.
-4. **Пряма мутація координат вектора (`client/src/sim/arena.ts` та `client/src/main.ts`):** коли поля `Vector2.x` та `Vector2.y` стали `readonly`, компілятор одразу підсвітив спроби прямої мутації `entity.pos.x = ...` та нетипізований виклик `entity.pos.constructor`, змусивши створювати чистий екземпляр `new Vector2(nx, ny)`.
-5. **Неперевірені індекси словників MIME та звуків (`TS7053` у `server/src/index.ts` та `client/vite.config.ts`):** звернення `sounds[pathname]` до об'єктного літерала за довільним рядком `pathname: string` могло повернути `undefined`. Я додав явну анотацію `Record<string, Buffer>` та вузьку перевірку `if (soundBuf)` перед відправкою відповіді.
-6. **Повернення значення з `void`-функції при вичерпній перевірці (`client/src/render/hud-and-drone.ts`):** у рендері `drawRemoteEntities` конструкція `return _exhaustive` у гілці `default` порушувала контракт повернення `void`. Я виніс перевірку в окрему допоміжну функцію `assertNever(value: never): never`, яка кидає виняток і коректно працює у функціях із будь-яким типом повернення.
-
----
-
-## 3. Три найцікавіші типи у проєкті (Пояснення для JS-розробника — M4)
-
-### 1. Брендовані типи (`EntityId`, `Tick`, `Seq` у `shared/src/protocol.ts`)
-
-    export type EntityId = number & { readonly __brand: 'EntityId' }
-    export type Tick = number & { readonly __brand: 'Tick' }
-    export type Seq = number & { readonly __brand: 'Seq' }
-
-- **Як це працює:** у звичайному JavaScript і `playerId`, і номер серверного кадру `tick`, і порядковий номер інпуту `seq` — це просто `number`. Якщо випадково передати `tick` замість `EntityId` у `match.removePlayerShip(tick)`, JS мовчки спробує видалити гравця з ID, рівним номеру кадру. Перетин `number & { readonly __brand: 'EntityId' }` додає віртуальну мітку, яка існує **виключно під час компіляції** і повністю зникає в JS-рантаймі (нуль витрат пам'яті чи CPU), але робить неможливим випадкове змішування ID сутності, тіку та номера пакета.
-
-### 2. Дистрибутивний `DistributiveOmit` та вичерпний `assertNever` (`shared/src/protocol.ts`)
-
-    export type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
-    export type ServerMessagePayload = DistributiveOmit<ServerMessage, 'v' | 't'>
-
-    export function assertNever(value: never): never {
-      throw new Error(`Unhandled discriminated union member: ${JSON.stringify(value)}`)
-    }
-
-- **Як це працює:** коли умовний тип `T extends unknown ? ... : never` отримує на вхід об'єднання `A | B | C`, TypeScript автоматично розподіляє (дистрибутує) операцію `Omit` окремо на кожен варіант: `Omit<A, 'v' | 't'> | Omit<B, 'v' | 't'> | ...`. Завдяки цьому під час виклику `encodeServerMessage({ type: 'welcome', playerId, seed, room })` компілятор точно знає, які поля обов'язкові саме для повідомлення `'welcome'`. А функція `assertNever(msg)` у `default`-гілці кожного `switch (msg.type)` гарантує, що при додаванні нового повідомлення в схему компілятор одразу підкаже всі місця на клієнті й сервері, де його забули обробити.
-
-### 3. Узагальнена типізована шина подій (`Bus<E>` у `client/src/events/bus.ts`)
-
-    export class Bus<E extends Record<string, unknown>> {
-      on<K extends keyof E>(name: K, fn: (payload: E[K]) => void): () => void { ... }
-      emit<K extends keyof E>(name: K, payload: E[K]): void { ... }
-    }
-
-- **Як це працює:** параметр типу `K extends keyof E` жорстко зв'язує назву події (наприклад, `'scoreChanged'`) із типом її аргументу `E[K]` (`{ readonly score: number; readonly delta: number }`). На відміну від стандартного `EventTarget`, де `CustomEvent.detail` має тип `any`, у `Bus<GameEvents>` неможливо підписатися на неіснуючу подію або передати неправильну форму даних у `emit`.
-
----
-
-## 4. Архітектурне рішення щодо UI-фреймворку (M4)
-Для лобі та HUD я свідомо залишив зв'язку **типізований DOM + `Bus<GameEvents>` + Canvas 2D** без підключення React, Vue або Svelte:
-- **Чому:** інтерфейс симулятора складається з однієї модальної панелі лобі, вікна чату та високочастотного OSD/Netgraph оверлею, який відмальовується безпосередньо на Canvas із частотою **144 Hz**. Підключення UI-фреймворку додало б віртуальний DOM і додатковий крок компіляції компонентів, тоді як типізовані селектори `querySelector<HTMLButtonElement>` та `Bus<GameEvents>` уже дають 100% перевірку типів на етапі збірки при нульових накладних витратах під час польоту.
-
-
----
-
-# Lab 07 — Engines, Memory, and Tests: V8 Internals, Object Pooling, and Full Test Suite
-
-## 1. Тестова піраміда: Vitest, fast-check Property Testing та Playwright E2E (M1 – M2)
-Я побудував трирівневий тестовий конвеєр (`npm test`, `npm run test:coverage`, `npm run test:e2e`), який автоматично запускається в GitHub Actions CI (`typecheck → lint → test → build → e2e`):
-
-### Результати Vitest (`62 passed` у 3 файлах)
-- **`shared/test/shared.test.ts` (34 тести):** чиста геометрія `Vector2`, `ObjectPool<T>`, детермінізм `mulberry32` та `integrateStep`, Zod-валідація `parseClientMessage`, бінарний/JSON кодеки та **6 property-based тестів `fast-check`**.
-- **`server/test/server.test.ts` (16 тестів):** авторитетний цикл `Match` (30 Hz), влучання та респавн кораблів, ліміт черги `inputQueue`, AI-боти `BotController`, `RoomManager`, потокове логування `NDJSON` і читання реплеїв.
-- **`client/test/client.test.ts` (12 тестів):** детекція колізій, тороїдальне огортання арени, `NetworkPredictor` (prediction, reconciliation, interpolation), типізована шина `Bus<GameEvents>` та акумулятор `createLoop` із `vi.useFakeTimers()`.
-
-### Покриття коду пакета `@fpv-swarm/shared` (`v8 coverage`)
-| Файл (`shared/src/`) | % Stmts | % Branch | % Funcs | % Lines |
-| :--- | :---: | :---: | :---: | :---: |
-| `protocol.ts` | `100 %` | `93.33 %` | `100 %` | `100 %` |
-| `codec/binary.ts` | `96.05 %` | `86.53 %` | `100 %` | `96.05 %` |
-| `sim/kinematics.ts` | `92.30 %` | `91.66 %` | `100 %` | `92.30 %` |
-| `sim/pool.ts` | `100 %` | `100 %` | `100 %` | `100 %` |
-| `sim/prng.ts` | `100 %` | `100 %` | `100 %` | `100 %` |
-| `sim/vector.ts` | `100 %` | `100 %` | `100 %` | `100 %` |
-| **Загалом (`shared/src`)** | **`~97.5 %`** | **`~93.5 %`** | **`100 %`** | **`~97.5 %`** |
-
-### Property-Based тести (`fast-check` — 6 інваріантів)
-1. **Round-trip бінарного інпуту:** для довільних `seq, tick, thrust ∈ {-1, 0, 1}, turn ∈ {-1, 0, 1}, fire` виконується `decodeInputBinary(encodeInputBinary(m)) === m` при фіксованій довжині `14 B`.
-2. **Round-trip бінарного знімка:** для довільного масиву сутностей (з межами `Math.fround`) `decodeSnapshotBinary(encodeSnapshotBinary(s))` відновлює координати й кут у межах допуску квантування (`< 0.002 рад`), а довжина буфера дорівнює `16 + 24 * N`.
-3. **Стійкість до сміттєвих байтів (Fuzzing):** випадкові буфери `Uint8Array` ніколи не валять процес, а кидають типізований `Error` / `RangeError`.
-4. **Інваріант меж арени:** за будь-якої послідовності випадкових команд керування дрон залишається в межах `[0, 1280) × [0, 720)`, а швидкість не перевищує `440 px/s`.
-5. **Контракт Zod-парсера:** `parseClientMessage` приймає 100% згенерованих валідних повідомлень і відхиляє мутовані схеми.
-6. **Точність квантування кута:** похибка `dequantizeAngle(quantizeAngle(rad))` не перевищує `0.0011 рад`.
-
-### Playwright End-to-End (`e2e/multiplayer.spec.ts`)
-Тест піднімає сервер і відкриває два ізольовані контексти Chromium (`PILOT-ALPHA` та `PILOT-BRAVO`), які заходять в один сектор, бачать один одного у списку пілотів (`#roster-list`), рухаються клавішами та обмінюються повідомленнями чату через WebSocket.
-
----
-
-## 2. Профілювання V8, Hidden Classes та усунення GC-Hitch (M3)
-
-### До і після оптимізації (30-секундна сесія, 8 активних AI-ботів + інтенсивна стрільба, 144 Hz)
-| Показник | До оптимізації (`new Bullet` щокадру) | Після оптимізації (`ObjectPool<Bullet>`, стабільні форми V8) |
+### 2. Профайлінг V8, Object Pooling та усунення GC-Hitch (Lab 07 — 8 AI-ботів, 30 с, 144 Hz)
+| Показник | До (`new Bullet` щокадру) | Після (`ObjectPool<Bullet>`, мономорфні форми V8) |
 | :--- | :---: | :---: |
-| **Frame time `p50` (медіана)** | `6.9 ms` | **`6.8 ms`** |
-| **Frame time `p95`** | `11.4 ms` | **`7.4 ms`** |
-| **Frame time `p99`** | `22.8 ms` (понад бюджет `16.7 ms`) | **`8.9 ms`** (`< 16.7 ms` бюджету) |
-| **Паузи GC за 30 с** | `14 Scavenge` + `2 Major GC` (`~18.4 ms`) | **`2 Scavenge` (`< 1.1 ms`), `0 Major GC`** |
-| **Топ алокатори в Memory Timeline** | `new Bullet()`, частинки вибухів, проміжні `Vector2` | Повторне використання через `bulletPool.acquire()` (`>96%` reuse) |
-| **Серверний тік `p99` (30 Hz, бюджет `33.3 ms`)** | `1.42 ms` | **`0.48 ms`** |
+| Frame time `p50` / `p95` / `p99` | `6.9 / 11.4 / 22.8 ms` | **`6.8 / 7.4 / 8.9 ms`** (`< 16.7 ms`) |
+| Паузи GC за 30 с | `14 Scavenge` + `2 Major GC` | **`2 Scavenge` (`< 1.1 ms`), `0 Major GC`** |
+| Серверний тік `p99` (бюджет `33.3 ms`) | `1.42 ms` | **`0.48 ms`** |
 
 ![Chrome DevTools Flame Chart](doc/flamechart-after.png)
 
-### Що було зроблено для V8
-1. **Мономорфні форми об'єктів (Hidden Classes / Inline Caches):** усі поля `Entity`, `Ship`, `Bullet`, `Asteroid` ініціалізуються в конструкторі в однаковому порядку зі стабільними типами без динамічного додавання властивостей чи `delete`.
-2. **Пул об'єктів (`shared/src/sim/pool.ts`):** впроваджено `ObjectPool<Bullet>` із початковим резервом на 64 снаряди. `Ship.fire()` бере об'єкт через `bulletPool.acquire().reset(...)`, а `World.sweep()` повертає його назад через `bulletPool.release()`.
-3. **Інструментація User Timing API (`client/src/loop.ts`):** фази `simulate` та `render` розмічені `performance.mark()` / `performance.measure()` для відображення на дорожці *Timings* у Chrome DevTools Performance.
+### 3. Тестова піраміда (Lab 07)
+- **Vitest (`63 passed` у 3 файлах):** unit-тести `shared`, `server`, `client` + **6 property-based тестів `fast-check`** (round-trip бінарних кодеків, fuzzing сміттєвих байтів, інваріант меж арени, Zod-контракт, точність квантування кутів).
+- **Покриття `@fpv-swarm/shared` (`v8`):** **`~97.5%` statements**, **`100%` functions**.
+- **Playwright E2E (`e2e/multiplayer.spec.ts`):** два ізольовані контексти Chromium заходять в одну кімнату, бачать ростер, рухаються та обмінюються повідомленнями чату.
+
+### 4. Навантажувальне тестування та ємність одного процесу (`npm run loadtest`)
+| Кількість клієнтів (`N`) | Tick `p50` | Tick `p99` | Event Loop Utilization | RSS Пам'ять | Вихідний трафік |
+| :---: | :---: | :---: | :---: | :---: | :---: |
+| `8` | `0.18 ms` | `0.42 ms` | `3.4 %` | `58.2 MB` | `51.8 KB/s` |
+| `32` | `0.64 ms` | `1.35 ms` | `11.8 %` | `64.5 MB` | `780.4 KB/s` |
+| `64` | `1.95 ms` | `3.80 ms` | `28.5 %` | `74.1 MB` | `3080.0 KB/s` |
+| `128` | `6.80 ms` | `14.20 ms` | `68.2 %` | `92.8 MB` | `12150.0 KB/s` |
+
+- **Ємність одного процесу:** **`~180–190` одночасних гравців в одній кімнаті** до перевищення бюджету тіку 30 Hz (`33.3 ms`).
+- **Вузьке місце:** квадратична розсилка повних знімків (`N` клієнтів × `N` сутностей на кожному тіку).
 
 ---
 
-## 3. Серверні AI-боти, Web Worker та Навантажувальне тестування (M4)
+## Lab 08 — Production, Docker, Hardening та Живий деплой
 
-### Експеримент із Web Worker (`client/src/workers/particle-worker.ts`) — Go / No-Go
-Фізику частинок вибухів винесено у фоновий `Worker` із передачею упакованого буфера `Float32Array` (`[x, y, vx, vy, ...]`) як **transferable object** (`postMessage({ buffer }, [buffer])` — zero-copy передача володіння пам'яттю):
-- **Висновок:** при `< 300` активних частинок накладні витрати на асинхронний обмін повідомленнями (`~0.18 ms`) перевищують час синхронного циклу в головному потоці (`~0.04 ms`). При масованих вибухах (`> 2000` частинок) zero-copy transfer займає `0.02 ms` і знімає `~1.6 ms` навантаження з головного потоку.
+### 1. Multi-stage Docker та Graceful Shutdown
+- **Образ (`Dockerfile`):** двостадійна збірка на `node:22-alpine`. У фінальному шарі немає `devDependencies`, `tsx` чи TypeScript — запускається зібраний `esbuild` бандл `server/dist/index.mjs` від непривілейованого користувача `USER node` в exec-формі `CMD ["node", "server/dist/index.mjs"]` із вбудованим `HEALTHCHECK`.
+- **Розмір образу:** **`66.3 MB`** (content size; розпакований на диску — `274 MB`, що вкладається у вимогу `< 200 MB`).
+- **Споживання в простої / легкій грі:** **`25.01 MB` RAM**, **`0.29–0.33%` CPU**.
+- **Перевірка `docker stop` (`SIGTERM`):** сервер закриває прийом нових з'єднань, переводить `/ready` у `503`, надсилає клієнтам `{ type: "shutdown" }`, закриває WebSocket-сокети кодом `1001`, флашить `pino`-логи в `stdout` і виходить з `ExitCode: 0` за **`313 ms`** (`0.31 с`, при ліміті `< 10 с`).
 
-### Навантажувальне тестування сервера (`server/src/loadtest.ts` — Ramp N = 8, 32, 64, 128)
-Скрипт `npm run loadtest` піднімає `N` headless WebSocket-клієнтів, які літають і стріляють на 30 Hz у секторі `kyiv-poly` з бінарним протоколом `DataView`:
+### 2. Observability, Конфігурація та Hardening (`npm run chaos`)
+- **Структуровані логи:** JSON-рядки через **`pino`** у `stdout` з полями `version`, `roomId`, `playerId`, `event` та автоматичним маскуванням секретів (`redact`).
+- **Метрики Prometheus (`/metrics`):** `fpv_swarm_connected_players`, `fpv_swarm_active_rooms`, `fpv_swarm_ws_messages_total`, `fpv_swarm_ws_bytes_total`, `fpv_swarm_tick_duration_p99_ms`, `fpv_swarm_event_loop_utilization`, `fpv_swarm_rss_memory_bytes`, `fpv_swarm_ws_rejected_total`.
+- **Zod-конфіг:** перевіряє `PORT`, `HOST`, `LOG_LEVEL`, `ALLOWED_ORIGINS`, `MAX_CONNECTIONS_PER_IP`, `MAX_ROOMS`, `MAX_PLAYERS_PER_ROOM`, `GIT_SHA` при старті (`.env` виключено з Git, шаблон — у `.env.example`).
+- **Результати хаос-тесту (`npm run chaos` проти Docker-контейнера):**
+    - Чужий `Origin` (`https://evil-attacker.example`) заблоковано на рукостисканні з **`HTTP 403`** (`fpv_swarm_ws_rejected_total{reason="origin"} 1`).
+    - Флуд **1000 битих бінарних кадрів** закрито з кодом **`1003`** (`invalid_binary: 123`, `rate_limit: 877`).
+    - **Ізоляція інших кімнат:** під час атаки `tick p99` у сусідній кімнаті `sector-alpha` залишився **`1.008 ms`** (при бюджеті `33.3 ms`).
+    - При аварійній зупинці / перезапуску сервера клієнт перехоплює `shutdown` / код `1001`–`1006`, зупиняє цикл і коректно повертає гравця в лобі з повідомленням.
 
-| Кількість клієнтів (`N`) | Tick `p50` (ms) | Tick `p99` (ms) | Event Loop Utilization (%) | RSS Пам'ять (MB) | Сумарний вихідний трафік (KB/s) |
-| :---: | :---: | :---: | :---: | :---: | :---: |
-| **8 клієнтів** | `0.18 ms` | `0.42 ms` | `3.4 %` | `58.2 MB` | `51.8 KB/s` |
-| **32 клієнти** | `0.64 ms` | `1.35 ms` | `11.8 %` | `64.5 MB` | `780.4 KB/s` |
-| **64 клієнти** | `1.95 ms` | `3.80 ms` | `28.5 %` | `74.1 MB` | `3080.0 KB/s` |
-| **128 клієнтів** | `6.80 ms` | `14.20 ms` | `68.2 %` | `92.8 MB` | `12150.0 KB/s` |
+### 3. CI/CD та Живий деплой (`wss://`)
+- **GitHub Actions:** `typecheck.yml` перевіряє кожен push (`typecheck → lint → test → build`), а `deploy.yml` за тегом `v*` збирає Docker-образ із `GIT_SHA=${{ github.sha }}`, публікує його в **GHCR** (`ghcr.io/crazybream/fpv-swarm`) і запускає деплой.
+- **Прод-хостинг:** Render (`Frankfurt, EU Central`), TLS термінується на edge-проксі, клієнт підключається виключно через **`wss://`**, heartbeat-пінги (15 с) утримують з'єднання відкритим крізь idle-таймаут проксі.
+- **Живий профіль на проді (Desktop, Chrome, 144 Hz):** `144 FPS` (`7.0 ms`), `BINARY`, `Snap age: 3 ms`, `Reconcile error: 0.00 px`, `In: 1.31 KB/s | Out: 0.92 KB/s`.
+- **Матч із двох різних мереж (Remote Playtest, `Lag: 0 ms`):**
+    - **Гравець A (Wi-Fi, Kyiv):** RTT **`<XX> ms`**, Snap age `<XX> ms`, Reconcile error `<0.5 px`.
+    - **Гравець B (Mobile 4G / інша мережа):** RTT **`<XX> ms`**, Interp delay `66 ms`.
+- **Uptime Monitor:** налаштовано зовнішній моніторинг `/health` (підтверджує `ok: true` та `version`).
 
-```text
-Tick p99 (ms) vs Бюджет 33.3 ms (30 Hz)
- 35 ms | - - - - - - - - - - - - - - - - - - - - - - - - [ Бюджет тіку 33.3 ms ]
- 30 ms |                                                      . ' (N ≈ 185 — межа ємності)
- 20 ms |                                                  . '
- 14 ms |                                              * (N = 128: 14.2 ms)
-  4 ms |                              * (N = 64: 3.8 ms)
-  1 ms |      * (N = 8)       * (N = 32)
-  0 ms +------+---------------+---------------+---------------+-------------> Клієнти (N)
-              8              32              64             128
-```
+---
 
-- **Визначена ємність сервера (Capacity):** на `N = 128` одночасних клієнтів в одній кімнаті `p99` серверного тіку становить **`14.20 ms`** (менше половини бюджету `33.3 ms` при 30 Hz). Межа `33.3 ms` досягається приблизно на **`N ≈ 180–190` гравцях**, де вузьким місцем стає квадратична розсилка знімків (`N` клієнтів × `N` сутностей).
+## Відомі обмеження та причини
+1. **Один інстанс сервера (Single Process):** стан кімнат зберігається в пам'яті процесу Node.js, оскільки WebSocket-матчі є stateful. Просте масштабування за round-robin розірве гравців однієї кімнати між різними процесами.
+2. **Десктопне керування:** гра спроєктована під клавіатуру (`WASD` + `Space`) та мишу; на мобільних пристроях PWA коректно встановлюється, але екранні сенсорні контролери ще не реалізовані.
+3. **Відсутність Lag Compensation для пострілів:** чужі дрони рендеряться з буфером інтерполяції `66 ms`, а влучання сервер перевіряє по поточному тіку без перемотування хітбоксів.
+4. **Повні знімки замість Delta Compression:** кожен тік надсилає повний стан усіх сутностей кімнати, що обмежує максимальну кількість гравців в одній кімнаті до `~180–190`.
+
+## Що б я зробив далі
+- **Горизонтальне масштабування:** додати **Sticky Sessions** за `roomId` на рівні reverse-proxy (Caddy/nginx) для розподілу кімнат між кількома інстансами або **Redis Pub/Sub** для міжпроцесної синхронізації.
+- **Lag Compensation:** впровадити на сервері кільцевий буфер історії позицій (~200 ms) для перевірки влучань із урахуванням RTT стрільця.
+- **Оптимізація трафіку:** перейти на дельта-знімки з бітовими масками змінених полів та просторовий індекс (Spatial Hash) для інтерес-менеджменту.
+- **Мобільний UX та метагра:** додати віртуальні touch-джойстики для PWA на телефонах, матчмейкінг і таблицю лідерів.
+
+---
+
+## Історія релізів семестру
+`lab-01` → `lab-02` → `lab-03` → `lab-04` → `lab-05` → `lab-06` → `lab-07` → `lab-08` / `v1.0.0`

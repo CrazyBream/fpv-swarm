@@ -2,11 +2,7 @@
   "name": "fpv-swarm",
   "private": true,
   "type": "module",
-  "workspaces": [
-    "shared",
-    "client",
-    "server"
-  ],
+  "workspaces": ["shared", "client", "server"],
   "scripts": {
     "dev:server": "tsx watch --env-file=.env server/src/index.ts",
     "dev:client": "npm --workspace=client run dev",
