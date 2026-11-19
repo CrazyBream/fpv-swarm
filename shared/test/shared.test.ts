@@ -466,7 +466,8 @@ describe('Property-Based Tests (fast-check)', () => {
           let diff = restored - angle
           while (diff > Math.PI) diff -= Math.PI * 2
           while (diff < -Math.PI) diff += Math.PI * 2
-          expect(Math.abs(restored - angle)).toBeLessThanOrEqual(0.0011)
+
+          expect(Math.abs(diff)).toBeLessThanOrEqual(0.0011)
         },
       ),
     )
